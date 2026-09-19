@@ -67,6 +67,8 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.TestOutput = output
 		certbot := nginxmgr.DetectCertbot(ctx)
 		response.Certbot = &certbot
+		renewalTimer := nginxmgr.DetectRenewalTimer(ctx)
+		response.RenewalTimer = &renewalTimer
 	case OperationCreateReverseProxy:
 		if request.Create == nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs {
 			return errors.New("invalid create_reverse_proxy request")
@@ -167,9 +169,11 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 			break
 		}
 		certbot := nginxmgr.DetectCertbot(ctx)
+		renewalTimer := nginxmgr.DetectRenewalTimer(ctx)
 		response.OK = true
 		response.Certificates = certificates
 		response.Certbot = &certbot
+		response.RenewalTimer = &renewalTimer
 	case OperationIssueCertificate:
 		if request.Create != nil || request.Update != nil || request.Issue == nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs {
 			return errors.New("invalid issue_certificate request")

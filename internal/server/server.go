@@ -45,13 +45,14 @@ type NginxStatus struct {
 }
 
 type PrivilegeStatus struct {
-	Ready      bool                    `json:"ready"`
-	Error      string                  `json:"error,omitempty"`
-	Runtime    *nginxmgr.RuntimeInfo   `json:"runtime,omitempty"`
-	Layout     *nginxmgr.Layout        `json:"layout,omitempty"`
-	ConfigOK   bool                    `json:"config_ok"`
-	TestOutput string                  `json:"test_output,omitempty"`
-	Certbot    *nginxmgr.CertbotStatus `json:"certbot,omitempty"`
+	Ready        bool                         `json:"ready"`
+	Error        string                       `json:"error,omitempty"`
+	Runtime      *nginxmgr.RuntimeInfo        `json:"runtime,omitempty"`
+	Layout       *nginxmgr.Layout             `json:"layout,omitempty"`
+	ConfigOK     bool                         `json:"config_ok"`
+	TestOutput   string                       `json:"test_output,omitempty"`
+	Certbot      *nginxmgr.CertbotStatus      `json:"certbot,omitempty"`
+	RenewalTimer *nginxmgr.RenewalTimerStatus `json:"renewal_timer,omitempty"`
 }
 
 func configStore() (*jsonstore.Store[Config], error) {
@@ -166,12 +167,13 @@ func Serve(ctx context.Context, listen, version string) error {
 			return
 		}
 		writeJSON(w, http.StatusOK, PrivilegeStatus{
-			Ready:      true,
-			Runtime:    response.Runtime,
-			Layout:     response.Layout,
-			ConfigOK:   response.ConfigOK,
-			TestOutput: response.TestOutput,
-			Certbot:    response.Certbot,
+			Ready:        true,
+			Runtime:      response.Runtime,
+			Layout:       response.Layout,
+			ConfigOK:     response.ConfigOK,
+			TestOutput:   response.TestOutput,
+			Certbot:      response.Certbot,
+			RenewalTimer: response.RenewalTimer,
 		})
 	})
 
@@ -318,8 +320,9 @@ func Serve(ctx context.Context, listen, version string) error {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"certificates": response.Certificates,
-			"certbot":      response.Certbot,
+			"certificates":  response.Certificates,
+			"certbot":       response.Certbot,
+			"renewal_timer": response.RenewalTimer,
 		})
 	})
 

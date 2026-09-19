@@ -7,6 +7,7 @@ const state = {
   snapshots: [],
   certificates: [],
   certbot: null,
+  renewalTimer: null,
   logs: [],
   editingSiteID: ""
 };
@@ -199,6 +200,7 @@ $("deleteBtn").onclick = async () => {
   state.snapshots = [];
   state.certificates = [];
   state.certbot = null;
+  state.renewalTimer = null;
   state.logs = [];
   await refresh();
 };
@@ -416,6 +418,7 @@ async function loadCertificates() {
   if (!state.selected) {
     state.certificates = [];
     state.certbot = null;
+    state.renewalTimer = null;
     renderCertificates();
     renderCertificateSites();
     $("certificateMessage").textContent = "请先选择一个 CLI 连接。";
@@ -428,6 +431,7 @@ async function loadCertificates() {
     const siteResult = await api().ListSites(state.selected);
     state.certificates = certificateResult.certificates || [];
     state.certbot = certificateResult.certbot || null;
+    state.renewalTimer = certificateResult.renewal_timer || null;
     state.sites = siteResult.sites || [];
     renderCertificates();
     renderCertificateSites();
@@ -435,6 +439,7 @@ async function loadCertificates() {
   } catch (err) {
     state.certificates = [];
     state.certbot = null;
+    state.renewalTimer = null;
     renderCertificates();
     renderCertificateSites();
     $("certificateMessage").textContent = cleanError(err);
@@ -446,12 +451,16 @@ function renderCertificates() {
   root.innerHTML = "";
 
   const certbotReady = Boolean(state.certbot?.available);
+  const renewalStatus = formatRenewalTimerStatus(state.renewalTimer);
   $("issueCertificateBtn").disabled = !certbotReady;
   $("renewCertificatesBtn").disabled = !certbotReady;
   if (certbotReady) {
-    $("certbotValue").textContent = "Certbot 已就绪 · " + (state.certbot.version || state.certbot.path || "可用");
+    $("certbotValue").textContent =
+      "Certbot 已就绪 · " + (state.certbot.version || state.certbot.path || "可用") +
+      " · 自动续期：" + renewalStatus;
   } else {
-    $("certbotValue").textContent = "Certbot 未安装或不在 PATH 中；签发和续期功能不可用。";
+    $("certbotValue").textContent =
+      "Certbot 未安装或不在 PATH 中；签发和续期功能不可用。 · 自动续期：" + renewalStatus;
   }
 
   if (!state.certificates.length) {
@@ -478,6 +487,14 @@ function renderCertificates() {
       '</div>';
     root.appendChild(item);
   }
+}
+
+function formatRenewalTimerStatus(timer) {
+  if (!timer?.systemd_available) return "systemd 不可用";
+  if (timer.active && timer.enabled) return "运行中";
+  if (timer.installed && timer.enabled) return "已启用但未运行";
+  if (timer.installed) return "已安装未启用";
+  return "未安装";
 }
 
 function renderCertificateSites() {

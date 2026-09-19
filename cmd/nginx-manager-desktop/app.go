@@ -123,9 +123,18 @@ type RemoteCertbotStatus struct {
 	Version   string `json:"version,omitempty"`
 }
 
+type RemoteRenewalTimerStatus struct {
+	SystemdAvailable bool   `json:"systemd_available"`
+	Installed        bool   `json:"installed"`
+	Enabled          bool   `json:"enabled"`
+	Active           bool   `json:"active"`
+	LoadState        string `json:"load_state,omitempty"`
+}
+
 type CertificateListResult struct {
-	Certificates []RemoteCertificate `json:"certificates"`
-	Certbot      RemoteCertbotStatus `json:"certbot"`
+	Certificates []RemoteCertificate      `json:"certificates"`
+	Certbot      RemoteCertbotStatus      `json:"certbot"`
+	RenewalTimer RemoteRenewalTimerStatus `json:"renewal_timer"`
 }
 
 type IssueCertificateRequest struct {

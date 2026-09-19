@@ -42,6 +42,7 @@ type ApplyResponse struct {
 	Snapshots    []nginxmgr.SnapshotMeta
 	Certificates []nginxmgr.Certificate
 	Certbot      *nginxmgr.CertbotStatus
+	RenewalTimer *nginxmgr.RenewalTimerStatus
 	Output       string
 	Logs         []nginxmgr.LogFile
 	LogTail      *nginxmgr.LogTail
