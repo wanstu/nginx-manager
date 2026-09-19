@@ -22,6 +22,7 @@
         <button class="nav-item" data-view="sites">站点与反向代理</button>
         <button class="nav-item" data-view="snapshots">快照与恢复</button>
         <button class="nav-item" data-view="certificates">HTTPS / 证书</button>
+        <button class="nav-item" data-view="logs">访问与错误日志</button>
       </nav>
 
       <div class="sidebar-note">
@@ -168,6 +169,37 @@
           <div class="actions">
             <button id="issueCertificateBtn" class="primary">申请 / 更新证书并启用 HTTPS</button>
           </div>
+        </section>
+      </div>
+
+      <div id="logsView" class="view hidden">
+        <section class="card">
+          <div class="section-title inline">
+            <div>
+              <h2>Nginx 日志</h2>
+              <p>只允许读取当前 Nginx 配置声明且位于受限日志目录中的常规文件。</p>
+            </div>
+            <button id="refreshLogsBtn">重新扫描</button>
+          </div>
+          <div class="log-controls">
+            <label>日志文件
+              <select id="logFileSelect"></select>
+            </label>
+            <label>读取末尾行数
+              <select id="logLines">
+                <option value="100">100 行</option>
+                <option value="200" selected>200 行</option>
+                <option value="500">500 行</option>
+                <option value="1000">1000 行</option>
+              </select>
+            </label>
+            <div class="log-action">
+              <button id="refreshLogContentBtn" class="primary">读取日志</button>
+            </div>
+          </div>
+          <div id="logMeta" class="log-meta">尚未读取日志。</div>
+          <pre id="logContent" class="log-viewer">选择一个日志文件后读取。</pre>
+          <pre id="logMessage">单次最多返回 1000 行 / 512 KiB。</pre>
         </section>
       </div>
     </main>

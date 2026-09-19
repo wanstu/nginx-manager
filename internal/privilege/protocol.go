@@ -13,6 +13,8 @@ const (
 	OperationListCertificates   = "list_certificates"
 	OperationIssueCertificate   = "issue_certificate"
 	OperationRenewCertificates  = "renew_certificates"
+	OperationListLogs           = "list_logs"
+	OperationTailLog            = "tail_log"
 )
 
 type ApplyRequest struct {
@@ -24,6 +26,8 @@ type ApplyRequest struct {
 	Enabled    bool
 	SnapshotID string
 	Limit      int
+	LogID      string
+	Lines      int
 }
 
 type ApplyResponse struct {
@@ -39,4 +43,6 @@ type ApplyResponse struct {
 	Certificates []nginxmgr.Certificate
 	Certbot      *nginxmgr.CertbotStatus
 	Output       string
+	Logs         []nginxmgr.LogFile
+	LogTail      *nginxmgr.LogTail
 }

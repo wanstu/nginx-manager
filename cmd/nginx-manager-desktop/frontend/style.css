@@ -184,6 +184,30 @@ pre {
 .certificate-side { display:flex; align-items:center; gap:10px; flex-shrink:0; }
 .certificate-date { font-size:11px; opacity:.55; }
 
+.log-controls {
+  display:grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(140px, .5fr) auto;
+  gap:12px;
+  align-items:end;
+}
+.log-controls label { margin-bottom:0; }
+.log-action { display:flex; align-items:end; }
+.log-meta {
+  margin-top:16px;
+  font-size:12px;
+  opacity:.65;
+}
+.log-viewer {
+  max-height:520px;
+  min-height:280px;
+  overflow:auto;
+  font-family:"Cascadia Code","JetBrains Mono","Consolas",monospace;
+  font-size:12px;
+  line-height:1.55;
+  tab-size:2;
+  user-select:text;
+}
+
 .snapshot-list { display:grid; gap:8px; }
 .snapshot-row {
   display:flex;
@@ -205,6 +229,7 @@ pre {
   .shell { grid-template-columns:230px 1fr; }
   main { padding:22px; }
   .grid,.status-grid { grid-template-columns:1fr; }
-  .site-row, .snapshot-row { align-items:flex-start; flex-direction:column; }
-  .site-side, .snapshot-side { width:100%; justify-content:space-between; }
+  .site-row, .snapshot-row, .certificate-row { align-items:flex-start; flex-direction:column; }
+  .site-side, .snapshot-side, .certificate-side { width:100%; justify-content:space-between; }
+  .log-controls { grid-template-columns:1fr; }
 }

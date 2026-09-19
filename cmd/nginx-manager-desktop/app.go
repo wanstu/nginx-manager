@@ -137,6 +137,23 @@ type RenewCertificatesResult struct {
 	Output string `json:"output"`
 }
 
+type RemoteLogFile struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+	Path string `json:"path"`
+}
+
+type LogListResult struct {
+	Logs []RemoteLogFile `json:"logs"`
+}
+
+type RemoteLogTail struct {
+	File      RemoteLogFile `json:"file"`
+	Lines     int           `json:"lines"`
+	Truncated bool          `json:"truncated"`
+	Content   string        `json:"content"`
+}
+
 type App struct {
 	settings *jsonstore.Store[Settings]
 	secure   *secureconfig.Store
@@ -459,6 +476,32 @@ func (a *App) RenewCertificates(id string) (RenewCertificatesResult, error) {
 	var result RenewCertificatesResult
 	if err := a.requestJSON(id, http.MethodPost, "/api/v1/certificates/renew", nil, &result); err != nil {
 		return RenewCertificatesResult{}, err
+	}
+	return result, nil
+}
+
+func (a *App) ListLogs(id string) ([]RemoteLogFile, error) {
+	var result LogListResult
+	if err := a.requestJSON(id, http.MethodGet, "/api/v1/logs", nil, &result); err != nil {
+		return nil, err
+	}
+	if result.Logs == nil {
+		result.Logs = []RemoteLogFile{}
+	}
+	return result.Logs, nil
+}
+
+func (a *App) TailLog(id, logID string, lines int) (RemoteLogTail, error) {
+	if lines <= 0 {
+		lines = 200
+	}
+	if lines > 1000 {
+		return RemoteLogTail{}, errors.New("日志行数最多为 1000")
+	}
+	var result RemoteLogTail
+	path := "/api/v1/logs/" + url.PathEscape(logID) + "?lines=" + fmt.Sprintf("%d", lines)
+	if err := a.requestJSON(id, http.MethodGet, path, nil, &result); err != nil {
+		return RemoteLogTail{}, err
 	}
 	return result, nil
 }

@@ -7,6 +7,7 @@ const state = {
   snapshots: [],
   certificates: [],
   certbot: null,
+  logs: [],
   editingSiteID: ""
 };
 
@@ -31,6 +32,7 @@ async function refresh() {
     if (state.view === "sites") await loadSites();
     if (state.view === "snapshots") await loadSnapshots();
     if (state.view === "certificates") await loadCertificates();
+    if (state.view === "logs") await loadLogs();
   } else {
     clearEditor(false);
   }
@@ -61,6 +63,7 @@ function renderConnections() {
       if (state.view === "sites") await loadSites();
       if (state.view === "snapshots") await loadSnapshots();
       if (state.view === "certificates") await loadCertificates();
+      if (state.view === "logs") await loadLogs();
     };
     root.appendChild(button);
   }
@@ -108,6 +111,9 @@ function updateHeader() {
   } else if (state.view === "certificates") {
     $("pageTitle").textContent = item ? item.name + " · HTTPS" : "HTTPS / 证书";
     $("pageSubtitle").textContent = "管理 Manager 站点的 ACME 证书与 HTTPS。";
+  } else if (state.view === "logs") {
+    $("pageTitle").textContent = item ? item.name + " · 日志" : "访问与错误日志";
+    $("pageSubtitle").textContent = "安全读取当前 Nginx / OpenResty 的日志尾部内容。";
   } else {
     $("pageTitle").textContent = item ? item.name : "连接管理";
     $("pageSubtitle").textContent = "保存多个 CLI Endpoint，并切换当前服务器。";
@@ -123,10 +129,12 @@ function setView(view) {
   $("sitesView").classList.toggle("hidden", view !== "sites");
   $("snapshotsView").classList.toggle("hidden", view !== "snapshots");
   $("certificatesView").classList.toggle("hidden", view !== "certificates");
+  $("logsView").classList.toggle("hidden", view !== "logs");
   updateHeader();
   if (view === "sites") loadSites();
   if (view === "snapshots") loadSnapshots();
   if (view === "certificates") loadCertificates();
+  if (view === "logs") loadLogs();
 }
 
 document.querySelectorAll(".nav-item").forEach((item) => {
@@ -191,6 +199,7 @@ $("deleteBtn").onclick = async () => {
   state.snapshots = [];
   state.certificates = [];
   state.certbot = null;
+  state.logs = [];
   await refresh();
 };
 
@@ -553,6 +562,99 @@ $("renewCertificatesBtn").onclick = async () => {
     $("renewCertificatesBtn").disabled = false;
   }
 };
+
+
+$("refreshLogsBtn").onclick = loadLogs;
+$("refreshLogContentBtn").onclick = loadLogTail;
+$("logFileSelect").onchange = loadLogTail;
+$("logLines").onchange = loadLogTail;
+
+async function loadLogs() {
+  if (!state.selected) {
+    state.logs = [];
+    renderLogOptions();
+    $("logContent").textContent = "请先选择一个 CLI 连接。";
+    $("logMeta").textContent = "尚未读取日志。";
+    return;
+  }
+
+  $("logMessage").textContent = "正在扫描当前 Nginx 配置中的日志…";
+  try {
+    state.logs = await api().ListLogs(state.selected);
+    state.logs = state.logs || [];
+    renderLogOptions();
+    if (state.logs.length) {
+      await loadLogTail();
+    } else {
+      $("logContent").textContent = "没有发现可读取的 Nginx 日志文件。";
+      $("logMeta").textContent = "0 个日志文件";
+      $("logMessage").textContent = "Nginx 配置中没有发现允许读取的常规日志文件。";
+    }
+  } catch (err) {
+    state.logs = [];
+    renderLogOptions();
+    $("logContent").textContent = "";
+    $("logMeta").textContent = "读取失败";
+    $("logMessage").textContent = cleanError(err);
+  }
+}
+
+function renderLogOptions() {
+  const select = $("logFileSelect");
+  const previous = select.value;
+  select.innerHTML = "";
+
+  if (!state.logs.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "没有可读取的日志";
+    select.appendChild(option);
+    return;
+  }
+
+  for (const log of state.logs) {
+    const option = document.createElement("option");
+    option.value = log.id;
+    option.textContent = (log.kind === "error" ? "错误" : "访问") + " · " + log.path;
+    select.appendChild(option);
+  }
+  if (state.logs.some((log) => log.id === previous)) {
+    select.value = previous;
+  }
+}
+
+async function loadLogTail() {
+  if (!state.selected) {
+    $("logMessage").textContent = "请先选择一个 CLI 连接。";
+    return;
+  }
+  const logID = $("logFileSelect").value;
+  if (!logID) {
+    $("logMessage").textContent = "没有可读取的日志文件。";
+    return;
+  }
+  const lines = Number($("logLines").value || 200);
+  $("refreshLogContentBtn").disabled = true;
+  $("logMessage").textContent = "正在读取日志尾部…";
+  try {
+    const result = await api().TailLog(state.selected, logID, lines);
+    $("logContent").textContent = result.content || "日志为空。";
+    const kind = result.file?.kind === "error" ? "错误日志" : "访问日志";
+    const path = result.file?.path || "";
+    $("logMeta").textContent =
+      kind + " · " + path + " · 返回 " + (result.lines || 0) + " 行" +
+      (result.truncated ? " · 已按安全上限截断" : "");
+    $("logMessage").textContent =
+      result.truncated
+        ? "内容已按 1000 行 / 512 KiB 安全上限截断。"
+        : "日志读取完成。";
+    $("logContent").scrollTop = $("logContent").scrollHeight;
+  } catch (err) {
+    $("logMessage").textContent = cleanError(err);
+  } finally {
+    $("refreshLogContentBtn").disabled = false;
+  }
+}
 
 function resetProxyEditor() {
   state.editingSiteID = "";

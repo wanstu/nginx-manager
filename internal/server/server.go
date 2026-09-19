@@ -356,6 +356,43 @@ func Serve(ctx context.Context, listen, version string) error {
 		writeJSON(w, http.StatusOK, map[string]string{"output": response.Output})
 	})
 
+	protected("GET /api/v1/logs", func(w http.ResponseWriter, r *http.Request) {
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationListLogs,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"logs": response.Logs})
+	})
+
+	protected("GET /api/v1/logs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		lines := 200
+		if raw := strings.TrimSpace(r.URL.Query().Get("lines")); raw != "" {
+			value, err := strconv.Atoi(raw)
+			if err != nil || value < 1 || value > nginxmgr.MaxLogLines {
+				writeAPIError(w, http.StatusBadRequest, fmt.Errorf("lines must be between 1 and %d", nginxmgr.MaxLogLines))
+				return
+			}
+			lines = value
+		}
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationTailLog,
+			LogID:     r.PathValue("id"),
+			Lines:     lines,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusConflict, err)
+			return
+		}
+		if response.LogTail == nil {
+			writeAPIError(w, http.StatusInternalServerError, errors.New("privileged helper returned no log tail"))
+			return
+		}
+		writeJSON(w, http.StatusOK, response.LogTail)
+	})
+
 	srv := &http.Server{
 		Addr:              listen,
 		Handler:           securityHeaders(mux),

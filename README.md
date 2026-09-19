@@ -44,6 +44,8 @@ POST   /api/v1/snapshots/{id}/restore    Basic Auth
 GET    /api/v1/certificates              Basic Auth
 POST   /api/v1/sites/{id}/certificate    Basic Auth
 POST   /api/v1/certificates/renew        Basic Auth
+GET    /api/v1/logs                      Basic Auth
+GET    /api/v1/logs/{id}?lines=200       Basic Auth
 ```
 
 Basic Auth 用户名固定为 `admin`，密码为 CLI 初始化时设置的管理密码。
@@ -79,6 +81,18 @@ HTTPS 由 Nginx Manager 控制 Nginx 配置，Certbot 只负责签发/续期证�
 7. 任一步失败都恢复签发前站点配置。
 
 已启用 HTTPS 的站点编辑上游或 WebSocket 时会保留证书配置；不能直接把域名改成与现有证书不匹配的新域名。
+
+## 日志读取
+
+日志读取同样走受限 root helper。Desktop 不发送日志路径，只发送由服务端生成的日志 ID。
+
+服务端会：
+
+- 从 `nginx -T` 解析当前 `access_log` / `error_log`；
+- 仅接受 Nginx/OpenResty 常见日志根目录中的路径；
+- tail 时重新解析当前配置并按日志 ID 匹配；
+- 拒绝 symlink 和非普通文件；
+- 单次最多返回 1000 行 / 512 KiB。
 
 ## Linux 权限模型
 
@@ -123,6 +137,7 @@ Desktop 当前能：
 - 查看 Certbot / 证书状态与到期时间；
 - 为 Manager 站点申请或更新 Let’s Encrypt 证书；
 - 可选 HTTP → HTTPS 强制跳转；
-- 手动执行 Certbot 续期检查。
+- 手动执行 Certbot 续期检查；
+- 安全浏览 Nginx/OpenResty 访问日志与错误日志尾部内容。
 
-下一阶段：自动续期 timer、访问日志与错误日志。
+下一阶段：自动续期 timer、证书自动维护、运行状态与流量概览。
