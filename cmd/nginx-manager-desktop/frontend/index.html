@@ -13,47 +13,100 @@
         <div class="logo">N</div>
         <div><strong>Nginx Manager</strong><span>多服务器控制台</span></div>
       </div>
-      <button id="newBtn" class="primary">＋ 添加连接</button>
+
+      <button id="newBtn" class="primary wide">＋ 添加连接</button>
       <div id="connections" class="connections"></div>
+
+      <nav class="side-nav">
+        <button class="nav-item active" data-view="overview">总览与连接</button>
+        <button class="nav-item" data-view="sites">站点与反向代理</button>
+      </nav>
+
+      <div class="sidebar-note">
+        Desktop 只通过 CLI API 管理服务器；管理密码由 Kit secureconfig 保存。
+      </div>
     </aside>
 
     <main>
       <header>
         <div>
           <h1 id="pageTitle">连接管理</h1>
-          <p>Desktop 可同时保存多个 nginx-manager CLI Endpoint。</p>
+          <p id="pageSubtitle">保存多个 CLI Endpoint，并切换当前服务器。</p>
         </div>
         <div id="statusBadge" class="badge">未连接</div>
       </header>
 
-      <section class="card">
-        <div class="grid">
-          <label>名称<input id="name" placeholder="例如：阿里云 Debian"></label>
-          <label>CLI Endpoint<input id="url" placeholder="https://nginx.example.com"></label>
-        </div>
-        <label>管理密码<input id="password" type="password" placeholder="新连接必填；编辑时留空表示保留原密码"></label>
-        <div class="hint">远程地址必须使用 HTTPS；HTTP 仅允许 localhost / 127.0.0.1 等回环地址，方便 SSH Tunnel。</div>
-        <div class="actions">
-          <button id="saveBtn" class="primary">保存连接</button>
-          <button id="testBtn">测试连接</button>
-          <button id="deleteBtn" class="danger">删除</button>
-        </div>
-      </section>
+      <div id="overviewView" class="view">
+        <section class="card">
+          <div class="section-title">
+            <div>
+              <h2>CLI 连接</h2>
+              <p>远程连接要求 HTTPS；回环地址可用 HTTP 配合 SSH Tunnel。</p>
+            </div>
+          </div>
+          <div class="grid">
+            <label>名称<input id="name" placeholder="例如：阿里云 Debian"></label>
+            <label>CLI Endpoint<input id="url" placeholder="https://nginx.example.com"></label>
+          </div>
+          <label>管理密码<input id="password" type="password" placeholder="新连接必填；编辑时留空表示保留原密码"></label>
+          <div class="actions">
+            <button id="saveBtn" class="primary">保存连接</button>
+            <button id="testBtn">测试连接</button>
+            <button id="deleteBtn" class="danger">删除</button>
+          </div>
+        </section>
 
-      <section class="card">
-        <h2>CLI 状态</h2>
-        <div class="status-grid">
-          <div><span>主机</span><strong id="hostValue">—</strong></div>
-          <div><span>CLI 版本</span><strong id="versionValue">—</strong></div>
-          <div><span>运行时</span><strong id="runtimeValue">—</strong></div>
-        </div>
-        <pre id="message">选择一个连接后进行测试。</pre>
-      </section>
+        <section class="card">
+          <div class="section-title">
+            <div>
+              <h2>CLI 状态</h2>
+              <p>确认当前 CLI 与 Nginx / OpenResty Runtime。</p>
+            </div>
+          </div>
+          <div class="status-grid">
+            <div><span>主机</span><strong id="hostValue">—</strong></div>
+            <div><span>CLI 版本</span><strong id="versionValue">—</strong></div>
+            <div><span>运行时</span><strong id="runtimeValue">—</strong></div>
+          </div>
+          <pre id="message">选择或新增一个 CLI 连接。</pre>
+        </section>
+      </div>
 
-      <section class="card muted">
-        <h2>下一阶段</h2>
-        <p>站点、反向代理、证书、配置测试、原子发布与回滚都会基于当前选中的 CLI 连接工作，不把 Desktop 绑定到任何一台服务器。</p>
-      </section>
+      <div id="sitesView" class="view hidden">
+        <section class="card">
+          <div class="section-title inline">
+            <div>
+              <h2>站点</h2>
+              <p id="layoutValue">连接 CLI 后读取服务器配置。</p>
+            </div>
+            <button id="refreshSitesBtn">刷新</button>
+          </div>
+          <div id="sitesList" class="site-list">
+            <div class="empty large">尚未读取站点</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-title">
+            <div>
+              <h2>新建反向代理</h2>
+              <p>先生成候选配置并测试；只有通过 nginx -t 才会落盘并 reload。</p>
+            </div>
+          </div>
+          <div class="grid">
+            <label>域名<input id="proxyServerName" placeholder="me.example.com"></label>
+            <label>上游<input id="proxyUpstream" placeholder="http://127.0.0.1:8002"></label>
+          </div>
+          <label class="check-row">
+            <input id="proxyWebSocket" type="checkbox" checked>
+            <span>启用 WebSocket Upgrade 头</span>
+          </label>
+          <div class="actions">
+            <button id="createProxyBtn" class="primary">创建并应用</button>
+          </div>
+          <pre id="siteMessage">创建操作会经过候选测试、全局 nginx -t、原子写入和 reload。</pre>
+        </section>
+      </div>
     </main>
   </div>
   <script src="/app.js"></script>

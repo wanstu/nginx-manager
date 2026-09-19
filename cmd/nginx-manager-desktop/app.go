@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -56,6 +58,38 @@ type TestResult struct {
 	Version  string `json:"version,omitempty"`
 }
 
+type RemoteSite struct {
+	ID         string `json:"id"`
+	ServerName string `json:"server_name"`
+	ProxyPass  string `json:"proxy_pass,omitempty"`
+	Enabled    bool   `json:"enabled"`
+	Managed    bool   `json:"managed"`
+	Path       string `json:"path"`
+}
+
+type RemoteLayout struct {
+	MainConfig   string `json:"main_config"`
+	AvailableDir string `json:"available_dir"`
+	EnabledDir   string `json:"enabled_dir"`
+	Mode         string `json:"mode"`
+}
+
+type SiteListResult struct {
+	Sites  []RemoteSite `json:"sites"`
+	Layout RemoteLayout `json:"layout"`
+}
+
+type CreateReverseProxyRequest struct {
+	ServerName string `json:"server_name"`
+	Upstream   string `json:"upstream"`
+	WebSocket  bool   `json:"websocket"`
+}
+
+type CreateReverseProxyResult struct {
+	Site       RemoteSite `json:"site"`
+	TestOutput string     `json:"test_output"`
+}
+
 type App struct {
 	settings *jsonstore.Store[Settings]
 	secure   *secureconfig.Store
@@ -91,7 +125,7 @@ func NewApp() (*App, error) {
 	return &App{
 		settings: store,
 		secure:   secure,
-		client:   &http.Client{Timeout: 6 * time.Second},
+		client:   &http.Client{Timeout: 20 * time.Second},
 	}, nil
 }
 
@@ -278,6 +312,93 @@ func (a *App) TestConnection(id string) (TestResult, error) {
 		runtime += " · " + payload.Runtime.Version
 	}
 	return TestResult{OK: true, Message: "连接正常", Hostname: payload.Hostname, Runtime: runtime, Version: payload.Version}, nil
+}
+
+func (a *App) ListSites(id string) (SiteListResult, error) {
+	var result SiteListResult
+	if err := a.requestJSON(id, http.MethodGet, "/api/v1/sites", nil, &result); err != nil {
+		return SiteListResult{}, err
+	}
+	if result.Sites == nil {
+		result.Sites = []RemoteSite{}
+	}
+	return result, nil
+}
+
+func (a *App) CreateReverseProxy(id string, req CreateReverseProxyRequest) (CreateReverseProxyResult, error) {
+	var result CreateReverseProxyResult
+	if err := a.requestJSON(id, http.MethodPost, "/api/v1/sites/reverse-proxy", req, &result); err != nil {
+		return CreateReverseProxyResult{}, err
+	}
+	return result, nil
+}
+
+func (a *App) requestJSON(id, method, path string, input any, output any) error {
+	connection, password, err := a.connectionCredentials(id)
+	if err != nil {
+		return err
+	}
+	var body io.Reader
+	if input != nil {
+		data, err := json.Marshal(input)
+		if err != nil {
+			return fmt.Errorf("encode request: %w", err)
+		}
+		body = bytes.NewReader(data)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, method, connection.URL+path, body)
+	if err != nil {
+		return err
+	}
+	request.SetBasicAuth("admin", string(password))
+	if input != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	response, err := a.client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	data, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		var payload struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(data, &payload) == nil && payload.Error != "" {
+			return errors.New(payload.Error)
+		}
+		return fmt.Errorf("HTTP %s", response.Status)
+	}
+	if output != nil && len(data) > 0 {
+		if err := json.Unmarshal(data, output); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+	}
+	return nil
+}
+
+func (a *App) connectionCredentials(id string) (connectionRecord, []byte, error) {
+	cfg, err := a.settings.Load()
+	if err != nil {
+		return connectionRecord{}, nil, err
+	}
+	for _, connection := range cfg.Connections {
+		if connection.ID != id {
+			continue
+		}
+		password, err := a.secure.Get(connection.CredentialRef)
+		if err != nil {
+			return connectionRecord{}, nil, fmt.Errorf("load password: %w", err)
+		}
+		return connection, password, nil
+	}
+	return connectionRecord{}, nil, errors.New("connection not found")
 }
 
 func normalizeEndpoint(raw string) (string, error) {

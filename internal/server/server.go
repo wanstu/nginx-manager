@@ -8,11 +8,11 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/wanstu/nginx-manager/internal/nginxmgr"
 	"github.com/wanstu/wails-desktop-kit/jsonstore"
 	"github.com/wanstu/wails-desktop-kit/paths"
 	"golang.org/x/crypto/bcrypt"
@@ -28,22 +28,17 @@ type Config struct {
 	PasswordHash string `json:"password_hash"`
 }
 
-type RuntimeInfo struct {
-	Kind    string `json:"kind"`
-	Path    string `json:"path"`
-	Version string `json:"version"`
-}
-
 type Info struct {
-	Version  string      `json:"version"`
-	Hostname string      `json:"hostname"`
-	Runtime  RuntimeInfo `json:"runtime"`
+	Version  string               `json:"version"`
+	Hostname string               `json:"hostname"`
+	Runtime  nginxmgr.RuntimeInfo `json:"runtime"`
 }
 
 type NginxStatus struct {
-	Runtime  RuntimeInfo `json:"runtime"`
-	ConfigOK bool        `json:"config_ok"`
-	Output   string      `json:"output"`
+	Runtime  nginxmgr.RuntimeInfo `json:"runtime"`
+	Layout   nginxmgr.Layout      `json:"layout"`
+	ConfigOK bool                 `json:"config_ok"`
+	Output   string               `json:"output"`
 }
 
 func configStore() (*jsonstore.Store[Config], error) {
@@ -128,24 +123,61 @@ func Serve(ctx context.Context, listen, version string) error {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": version})
 	})
-	mux.Handle("GET /api/v1/info", authenticate(cfg.PasswordHash, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+	protected := func(pattern string, handler http.HandlerFunc) {
+		mux.Handle(pattern, authenticate(cfg.PasswordHash, handler))
+	}
+
+	protected("GET /api/v1/info", func(w http.ResponseWriter, r *http.Request) {
 		hostname, _ := os.Hostname()
-		writeJSON(w, http.StatusOK, Info{Version: version, Hostname: hostname, Runtime: DetectRuntime(r.Context())})
-	})))
-	mux.Handle("GET /api/v1/nginx/status", authenticate(cfg.PasswordHash, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		runtime := DetectRuntime(r.Context())
-		status := NginxStatus{Runtime: runtime}
-		if runtime.Path == "" {
-			status.Output = "nginx/openresty executable not found"
-			writeJSON(w, http.StatusOK, status)
+		writeJSON(w, http.StatusOK, Info{Version: version, Hostname: hostname, Runtime: nginxmgr.DetectRuntime(r.Context())})
+	})
+
+	protected("GET /api/v1/nginx/status", func(w http.ResponseWriter, r *http.Request) {
+		manager, err := nginxmgr.New(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusOK, NginxStatus{Runtime: nginxmgr.DetectRuntime(r.Context()), Output: err.Error()})
 			return
 		}
-		cmd := exec.CommandContext(r.Context(), runtime.Path, "-t")
-		output, testErr := cmd.CombinedOutput()
-		status.ConfigOK = testErr == nil
-		status.Output = strings.TrimSpace(string(output))
-		writeJSON(w, http.StatusOK, status)
-	})))
+		ok, output := manager.Status(r.Context())
+		writeJSON(w, http.StatusOK, NginxStatus{Runtime: manager.Runtime, Layout: manager.Layout, ConfigOK: ok, Output: output})
+	})
+
+	protected("GET /api/v1/sites", func(w http.ResponseWriter, r *http.Request) {
+		manager, err := nginxmgr.New(r.Context())
+		if err != nil {
+			writeAPIError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		sites, err := manager.ListSites()
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"sites": sites, "layout": manager.Layout})
+	})
+
+	protected("POST /api/v1/sites/reverse-proxy", func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		var req nginxmgr.ReverseProxyRequest
+		if err := decoder.Decode(&req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, fmt.Errorf("invalid request: %w", err))
+			return
+		}
+		manager, err := nginxmgr.New(r.Context())
+		if err != nil {
+			writeAPIError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		result, err := manager.CreateReverseProxy(r.Context(), req)
+		if err != nil {
+			writeAPIError(w, http.StatusConflict, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, result)
+	})
 
 	srv := &http.Server{
 		Addr:              listen,
@@ -173,32 +205,11 @@ func Serve(ctx context.Context, listen, version string) error {
 	}
 }
 
-func DetectRuntime(ctx context.Context) RuntimeInfo {
-	for _, candidate := range []struct{ kind, name string }{
-		{"nginx", "nginx"},
-		{"openresty", "openresty"},
-	} {
-		path, err := exec.LookPath(candidate.name)
-		if err != nil {
-			continue
-		}
-		cmd := exec.CommandContext(ctx, path, "-v")
-		output, _ := cmd.CombinedOutput()
-		version := strings.TrimSpace(string(output))
-		kind := candidate.kind
-		if strings.Contains(strings.ToLower(version), "openresty") {
-			kind = "openresty"
-		}
-		return RuntimeInfo{Kind: kind, Path: path, Version: version}
-	}
-	return RuntimeInfo{}
-}
-
 func authenticate(hash string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, password, ok := r.BasicAuth()
 		if !ok || user != "admin" || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
-			w.Header().Set("WWW-Authenticate", `Basic realm="nginx-manager"`)
+			w.Header().Set("WWW-Authenticate", "Basic realm=\"nginx-manager\"")
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
@@ -213,6 +224,10 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func writeAPIError(w http.ResponseWriter, status int, err error) {
+	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

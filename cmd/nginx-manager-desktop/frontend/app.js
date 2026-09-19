@@ -1,70 +1,121 @@
-const state = { items: [], selected: "" };
+const state = {
+  items: [],
+  selected: "",
+  view: "overview",
+  sites: [],
+  layout: null
+};
 
 function api() {
   return window.go?.main?.App;
 }
-function $(id) { return document.getElementById(id); }
+
+function $(id) {
+  return document.getElementById(id);
+}
 
 async function refresh() {
   const app = api();
   if (!app) return setTimeout(refresh, 100);
+
   state.items = await app.ListConnections();
   state.selected = await app.GetSelectedID();
-  renderList();
-  if (state.selected) loadEditor(state.selected);
-  else clearEditor();
+  renderConnections();
+
+  if (state.selected) {
+    loadEditor(state.selected);
+    if (state.view === "sites") await loadSites();
+  } else {
+    clearEditor(false);
+  }
 }
 
-function renderList() {
+function renderConnections() {
   const root = $("connections");
   root.innerHTML = "";
+
   if (!state.items.length) {
     root.innerHTML = '<div class="empty">还没有 CLI 连接</div>';
     return;
   }
+
   for (const item of state.items) {
     const button = document.createElement("button");
     button.className = "connection" + (item.id === state.selected ? " active" : "");
-    button.innerHTML = `<strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.url)}</span>`;
+    button.innerHTML =
+      "<strong>" + escapeHtml(item.name) + "</strong>" +
+      "<span>" + escapeHtml(item.url) + "</span>";
+
     button.onclick = async () => {
       state.selected = item.id;
       await api().SelectConnection(item.id);
-      renderList();
+      renderConnections();
       loadEditor(item.id);
+      if (state.view === "sites") await loadSites();
     };
     root.appendChild(button);
   }
 }
 
 function loadEditor(id) {
-  const item = state.items.find(x => x.id === id);
-  if (!item) return clearEditor();
+  const item = state.items.find((x) => x.id === id);
+  if (!item) return clearEditor(false);
+
   $("name").value = item.name;
   $("url").value = item.url;
   $("password").value = "";
-  $("pageTitle").textContent = item.name;
   resetStatus();
+  updateHeader();
 }
 
-function clearEditor() {
-  state.selected = "";
+function clearEditor(resetSelection = true) {
+  if (resetSelection) state.selected = "";
   $("name").value = "";
   $("url").value = "";
   $("password").value = "";
-  $("pageTitle").textContent = "添加连接";
   resetStatus();
+  updateHeader();
 }
 
 function resetStatus() {
-  $("statusBadge").textContent = "未连接";
+  $("statusBadge").textContent = state.selected ? "未检测" : "未连接";
   $("statusBadge").className = "badge";
   $("hostValue").textContent = "—";
   $("versionValue").textContent = "—";
   $("runtimeValue").textContent = "—";
-  $("message").textContent = "保存后可测试 CLI 连接。";
+  $("message").textContent = state.selected ? "可测试当前 CLI 连接。" : "选择或新增一个 CLI 连接。";
 }
 
-$("newBtn").onclick = clearEditor;
+function updateHeader() {
+  const item = state.items.find((x) => x.id === state.selected);
+  if (state.view === "sites") {
+    $("pageTitle").textContent = item ? item.name + " · 站点" : "站点";
+    $("pageSubtitle").textContent = "读取和管理当前 CLI 所在服务器的 Nginx / OpenResty 站点。";
+  } else {
+    $("pageTitle").textContent = item ? item.name : "连接管理";
+    $("pageSubtitle").textContent = "保存多个 CLI Endpoint，并切换当前服务器。";
+  }
+}
+
+function setView(view) {
+  state.view = view;
+  document.querySelectorAll(".nav-item").forEach((item) => {
+    item.classList.toggle("active", item.dataset.view === view);
+  });
+  $("overviewView").classList.toggle("hidden", view !== "overview");
+  $("sitesView").classList.toggle("hidden", view !== "sites");
+  updateHeader();
+  if (view === "sites") loadSites();
+}
+
+document.querySelectorAll(".nav-item").forEach((item) => {
+  item.onclick = () => setView(item.dataset.view);
+});
+
+$("newBtn").onclick = () => {
+  setView("overview");
+  clearEditor();
+};
 
 $("saveBtn").onclick = async () => {
   try {
@@ -80,14 +131,19 @@ $("saveBtn").onclick = async () => {
     await refresh();
     $("message").textContent = "连接已保存。密码已写入 Desktop Kit secureconfig。";
   } catch (err) {
-    $("message").textContent = String(err);
+    $("message").textContent = cleanError(err);
   }
 };
 
 $("testBtn").onclick = async () => {
-  if (!state.selected) return $("message").textContent = "请先保存连接。";
+  if (!state.selected) {
+    $("message").textContent = "请先保存连接。";
+    return;
+  }
+
   $("statusBadge").textContent = "检测中";
   $("message").textContent = "正在连接 CLI…";
+
   try {
     const result = await api().TestConnection(state.selected);
     $("statusBadge").textContent = result.ok ? "正常" : "失败";
@@ -99,20 +155,127 @@ $("testBtn").onclick = async () => {
   } catch (err) {
     $("statusBadge").textContent = "失败";
     $("statusBadge").className = "badge bad";
-    $("message").textContent = String(err);
+    $("message").textContent = cleanError(err);
   }
 };
 
 $("deleteBtn").onclick = async () => {
   if (!state.selected) return;
   if (!confirm("删除这个 CLI 连接？保存的密码也会一起删除。")) return;
+
   await api().DeleteConnection(state.selected);
   state.selected = "";
+  state.sites = [];
   await refresh();
 };
 
+$("refreshSitesBtn").onclick = loadSites;
+
+async function loadSites() {
+  if (!state.selected) {
+    state.sites = [];
+    state.layout = null;
+    renderSites();
+    $("siteMessage").textContent = "请先选择一个 CLI 连接。";
+    return;
+  }
+
+  $("sitesList").innerHTML = '<div class="empty large">正在读取站点…</div>';
+  try {
+    const result = await api().ListSites(state.selected);
+    state.sites = result.sites || [];
+    state.layout = result.layout || null;
+    renderSites();
+    $("siteMessage").textContent = "已读取 " + state.sites.length + " 个站点。";
+  } catch (err) {
+    state.sites = [];
+    state.layout = null;
+    renderSites();
+    $("siteMessage").textContent = cleanError(err);
+  }
+}
+
+function renderSites() {
+  const root = $("sitesList");
+  root.innerHTML = "";
+
+  if (state.layout) {
+    $("layoutValue").textContent =
+      state.layout.mode + " · " + (state.layout.available_dir || state.layout.main_config || "");
+  } else {
+    $("layoutValue").textContent = "连接 CLI 后读取服务器配置。";
+  }
+
+  if (!state.sites.length) {
+    root.innerHTML = '<div class="empty large">没有发现站点配置</div>';
+    return;
+  }
+
+  for (const site of state.sites) {
+    const item = document.createElement("div");
+    item.className = "site-row";
+    const title = site.server_name || site.id;
+    const proxy = site.proxy_pass || "非反向代理 / 未识别";
+    item.innerHTML =
+      '<div class="site-main">' +
+        '<strong>' + escapeHtml(title) + '</strong>' +
+        '<span>' + escapeHtml(proxy) + '</span>' +
+      '</div>' +
+      '<div class="site-tags">' +
+        '<span class="mini-badge ' + (site.enabled ? "ok" : "") + '">' + (site.enabled ? "已启用" : "未启用") + '</span>' +
+        '<span class="mini-badge ' + (site.managed ? "managed" : "") + '">' + (site.managed ? "Manager 管理" : "外部配置") + '</span>' +
+      '</div>';
+    root.appendChild(item);
+  }
+}
+
+$("createProxyBtn").onclick = async () => {
+  if (!state.selected) {
+    $("siteMessage").textContent = "请先选择一个 CLI 连接。";
+    return;
+  }
+
+  const serverName = $("proxyServerName").value.trim();
+  const upstream = $("proxyUpstream").value.trim();
+  if (!serverName || !upstream) {
+    $("siteMessage").textContent = "域名和上游都不能为空。";
+    return;
+  }
+
+  $("createProxyBtn").disabled = true;
+  $("siteMessage").textContent = "正在生成候选配置并执行 nginx -t…";
+
+  try {
+    const result = await api().CreateReverseProxy(state.selected, {
+      server_name: serverName,
+      upstream: upstream,
+      websocket: $("proxyWebSocket").checked
+    });
+    $("siteMessage").textContent =
+      "创建成功：" + (result.site?.server_name || serverName) +
+      (result.test_output ? "\n" + result.test_output : "");
+    $("proxyServerName").value = "";
+    $("proxyUpstream").value = "";
+    await loadSites();
+  } catch (err) {
+    $("siteMessage").textContent = cleanError(err);
+  } finally {
+    $("createProxyBtn").disabled = false;
+  }
+};
+
+function cleanError(err) {
+  return String(err || "未知错误").replace(/^Error:\s*/, "");
+}
+
 function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  return String(value).replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[ch]);
 }
 
 refresh();
