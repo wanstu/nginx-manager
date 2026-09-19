@@ -157,3 +157,36 @@ Manager 管理的站点在停用或删除前会自动保存 root-only 快照：
 ```
 
 快照文件模式为 `0600`。外部手写配置没有 Manager 标记时不会被启停或删除。
+
+
+## HTTPS / Certbot
+
+服务器需要预先安装 Certbot。Debian 可使用系统包管理器安装，例如：
+
+```bash
+sudo apt update
+sudo apt install -y certbot
+```
+
+签发前请确认：
+
+- 域名 DNS 已解析到当前服务器；
+- 公网 TCP 80 可访问当前 Nginx；
+- 启用 HTTPS 后公网 TCP 443 可访问；
+- 目标站点由 Nginx Manager 管理且处于启用状态。
+
+Nginx Manager 使用 HTTP-01 Webroot：
+
+```text
+/var/lib/nginx-manager/acme-webroot
+```
+
+Certbot 只负责写入 Let’s Encrypt 证书；Nginx Manager 自己生成并事务应用 TLS 配置，不允许 Certbot 直接编辑站点配置。
+
+证书元数据默认从以下目录读取：
+
+```text
+/etc/letsencrypt/live
+```
+
+可以在 Desktop 的 “HTTPS / 证书” 页面查看证书到期时间、申请证书、启用 HTTP → HTTPS 以及手动执行续期检查。

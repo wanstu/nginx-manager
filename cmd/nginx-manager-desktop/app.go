@@ -61,13 +61,16 @@ type TestResult struct {
 }
 
 type RemoteSite struct {
-	ID         string `json:"id"`
-	ServerName string `json:"server_name"`
-	ProxyPass  string `json:"proxy_pass,omitempty"`
-	Enabled    bool   `json:"enabled"`
-	Managed    bool   `json:"managed"`
-	WebSocket  bool   `json:"websocket"`
-	Path       string `json:"path"`
+	ID            string `json:"id"`
+	ServerName    string `json:"server_name"`
+	ProxyPass     string `json:"proxy_pass,omitempty"`
+	Enabled       bool   `json:"enabled"`
+	Managed       bool   `json:"managed"`
+	WebSocket     bool   `json:"websocket"`
+	HTTPS         bool   `json:"https"`
+	RedirectHTTPS bool   `json:"redirect_https"`
+	Certificate   string `json:"certificate,omitempty"`
+	Path          string `json:"path"`
 }
 
 type RemoteLayout struct {
@@ -103,6 +106,35 @@ type RemoteSnapshot struct {
 
 type SnapshotListResult struct {
 	Snapshots []RemoteSnapshot `json:"snapshots"`
+}
+
+type RemoteCertificate struct {
+	Name      string   `json:"name"`
+	Domains   []string `json:"domains"`
+	NotBefore string   `json:"not_before"`
+	NotAfter  string   `json:"not_after"`
+	Issuer    string   `json:"issuer"`
+	Path      string   `json:"path"`
+}
+
+type RemoteCertbotStatus struct {
+	Available bool   `json:"available"`
+	Path      string `json:"path,omitempty"`
+	Version   string `json:"version,omitempty"`
+}
+
+type CertificateListResult struct {
+	Certificates []RemoteCertificate `json:"certificates"`
+	Certbot      RemoteCertbotStatus `json:"certbot"`
+}
+
+type IssueCertificateRequest struct {
+	Email         string `json:"email"`
+	RedirectHTTPS bool   `json:"redirect_https"`
+}
+
+type RenewCertificatesResult struct {
+	Output string `json:"output"`
 }
 
 type App struct {
@@ -401,6 +433,34 @@ func (a *App) RestoreSnapshot(id, snapshotID string) (RemoteSite, error) {
 		return RemoteSite{}, err
 	}
 	return site, nil
+}
+
+func (a *App) ListCertificates(id string) (CertificateListResult, error) {
+	var result CertificateListResult
+	if err := a.requestJSON(id, http.MethodGet, "/api/v1/certificates", nil, &result); err != nil {
+		return CertificateListResult{}, err
+	}
+	if result.Certificates == nil {
+		result.Certificates = []RemoteCertificate{}
+	}
+	return result, nil
+}
+
+func (a *App) IssueCertificate(id, siteID string, req IssueCertificateRequest) (RemoteSite, error) {
+	var site RemoteSite
+	path := "/api/v1/sites/" + url.PathEscape(siteID) + "/certificate"
+	if err := a.requestJSON(id, http.MethodPost, path, req, &site); err != nil {
+		return RemoteSite{}, err
+	}
+	return site, nil
+}
+
+func (a *App) RenewCertificates(id string) (RenewCertificatesResult, error) {
+	var result RenewCertificatesResult
+	if err := a.requestJSON(id, http.MethodPost, "/api/v1/certificates/renew", nil, &result); err != nil {
+		return RenewCertificatesResult{}, err
+	}
+	return result, nil
 }
 
 func (a *App) SetSiteEnabled(id, siteID string, enabled bool) (RemoteSite, error) {

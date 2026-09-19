@@ -45,12 +45,13 @@ type NginxStatus struct {
 }
 
 type PrivilegeStatus struct {
-	Ready      bool                  `json:"ready"`
-	Error      string                `json:"error,omitempty"`
-	Runtime    *nginxmgr.RuntimeInfo `json:"runtime,omitempty"`
-	Layout     *nginxmgr.Layout      `json:"layout,omitempty"`
-	ConfigOK   bool                  `json:"config_ok"`
-	TestOutput string                `json:"test_output,omitempty"`
+	Ready      bool                    `json:"ready"`
+	Error      string                  `json:"error,omitempty"`
+	Runtime    *nginxmgr.RuntimeInfo   `json:"runtime,omitempty"`
+	Layout     *nginxmgr.Layout        `json:"layout,omitempty"`
+	ConfigOK   bool                    `json:"config_ok"`
+	TestOutput string                  `json:"test_output,omitempty"`
+	Certbot    *nginxmgr.CertbotStatus `json:"certbot,omitempty"`
 }
 
 func configStore() (*jsonstore.Store[Config], error) {
@@ -170,6 +171,7 @@ func Serve(ctx context.Context, listen, version string) error {
 			Layout:     response.Layout,
 			ConfigOK:   response.ConfigOK,
 			TestOutput: response.TestOutput,
+			Certbot:    response.Certbot,
 		})
 	})
 
@@ -305,6 +307,53 @@ func Serve(ctx context.Context, listen, version string) error {
 			return
 		}
 		writeJSON(w, http.StatusOK, response.Site)
+	})
+
+	protected("GET /api/v1/certificates", func(w http.ResponseWriter, r *http.Request) {
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationListCertificates,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"certificates": response.Certificates,
+			"certbot":      response.Certbot,
+		})
+	})
+
+	protected("POST /api/v1/sites/{id}/certificate", func(w http.ResponseWriter, r *http.Request) {
+		var req nginxmgr.IssueCertificateRequest
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err)
+			return
+		}
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationIssueCertificate,
+			SiteID:    r.PathValue("id"),
+			Issue:     &req,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusConflict, err)
+			return
+		}
+		if response.Site == nil {
+			writeAPIError(w, http.StatusInternalServerError, errors.New("privileged helper returned no site result"))
+			return
+		}
+		writeJSON(w, http.StatusOK, response.Site)
+	})
+
+	protected("POST /api/v1/certificates/renew", func(w http.ResponseWriter, r *http.Request) {
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationRenewCertificates,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusConflict, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"output": response.Output})
 	})
 
 	srv := &http.Server{

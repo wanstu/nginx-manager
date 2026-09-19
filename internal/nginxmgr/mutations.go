@@ -60,7 +60,14 @@ func (m *Manager) UpdateReverseProxy(ctx context.Context, siteID string, req Upd
 		}
 	}
 
-	content := renderReverseProxy(serverName, upstream, req.WebSocket)
+	var tls *TLSConfig
+	if current.Site.HTTPS {
+		if serverName != current.Site.ServerName {
+			return ApplyResult{}, errors.New("cannot change server_name while HTTPS is enabled; request a certificate for the new hostname first")
+		}
+		tls = tlsConfigForSite(current.Site.ServerName, current.Site.RedirectHTTPS)
+	}
+	content := renderReverseProxyManaged(serverName, upstream, req.WebSocket, tls, acmeWebroot())
 	if err := m.validateCandidate(ctx, newID, content); err != nil {
 		return ApplyResult{}, err
 	}
@@ -253,6 +260,7 @@ func (m *Manager) loadManagedSite(siteID string) (managedSiteState, error) {
 		site.ProxyPass = strings.TrimSpace(match[1])
 	}
 	site.WebSocket = websocketEnabled(text)
+	applyTLSFields(&site, text)
 
 	return managedSiteState{Site: site, Content: data, ActualPath: actual}, nil
 }

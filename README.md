@@ -41,6 +41,9 @@ PUT    /api/v1/sites/{id}/enabled         Basic Auth
 DELETE /api/v1/sites/{id}                Basic Auth
 GET    /api/v1/snapshots                 Basic Auth
 POST   /api/v1/snapshots/{id}/restore    Basic Auth
+GET    /api/v1/certificates              Basic Auth
+POST   /api/v1/sites/{id}/certificate    Basic Auth
+POST   /api/v1/certificates/renew        Basic Auth
 ```
 
 Basic Auth 用户名固定为 `admin`，密码为 CLI 初始化时设置的管理密码。
@@ -60,6 +63,22 @@ Basic Auth 用户名固定为 `admin`，密码为 CLI 初始化时设置的管�
 Manager 创建的站点带 `# managed-by: nginx-manager` 标记。现有外部配置可以读取，但不会被新建、启停或删除操作覆盖。
 
 Manager 站点在停用或删除前会自动保存 root-only 快照；`sites-enabled` 与 `conf.d` 两种常见布局都支持安全启停。
+
+## HTTPS / ACME
+
+HTTPS 由 Nginx Manager 控制 Nginx 配置，Certbot 只负责签发/续期证书，不使用 `certbot --nginx` 修改站点文件。
+
+首次签发流程：
+
+1. 为 Manager 站点临时加入 `/.well-known/acme-challenge/` Webroot；
+2. `nginx -t` 成功后 reload；
+3. 使用固定参数执行 Certbot HTTP-01；
+4. 验证签发证书与站点域名匹配；
+5. 生成 443 TLS 配置，可选 HTTP → HTTPS 301；
+6. 再次 `nginx -t` 后 reload；
+7. 任一步失败都恢复签发前站点配置。
+
+已启用 HTTPS 的站点编辑上游或 WebSocket 时会保留证书配置；不能直接把域名改成与现有证书不匹配的新域名。
 
 ## Linux 权限模型
 
@@ -100,6 +119,10 @@ Desktop 当前能：
 - 编辑 Manager 反向代理的域名、上游和 WebSocket 设置；
 - 启用、停用、删除 Manager 管理的站点；
 - 查看最近的配置快照；
-- 事务恢复历史快照，恢复前再次自动保存当前状态。
+- 事务恢复历史快照，恢复前再次自动保存当前状态；
+- 查看 Certbot / 证书状态与到期时间；
+- 为 Manager 站点申请或更新 Let’s Encrypt 证书；
+- 可选 HTTP → HTTPS 强制跳转；
+- 手动执行 Certbot 续期检查。
 
-下一阶段：证书 / ACME、访问日志与错误日志。
+下一阶段：自动续期 timer、访问日志与错误日志。

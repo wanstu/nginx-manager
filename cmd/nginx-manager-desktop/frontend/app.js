@@ -5,6 +5,8 @@ const state = {
   sites: [],
   layout: null,
   snapshots: [],
+  certificates: [],
+  certbot: null,
   editingSiteID: ""
 };
 
@@ -28,6 +30,7 @@ async function refresh() {
     loadEditor(state.selected);
     if (state.view === "sites") await loadSites();
     if (state.view === "snapshots") await loadSnapshots();
+    if (state.view === "certificates") await loadCertificates();
   } else {
     clearEditor(false);
   }
@@ -57,6 +60,7 @@ function renderConnections() {
       resetProxyEditor();
       if (state.view === "sites") await loadSites();
       if (state.view === "snapshots") await loadSnapshots();
+      if (state.view === "certificates") await loadCertificates();
     };
     root.appendChild(button);
   }
@@ -101,6 +105,9 @@ function updateHeader() {
   } else if (state.view === "snapshots") {
     $("pageTitle").textContent = item ? item.name + " · 快照" : "快照";
     $("pageSubtitle").textContent = "查看 Manager 变更快照，并通过事务恢复历史配置。";
+  } else if (state.view === "certificates") {
+    $("pageTitle").textContent = item ? item.name + " · HTTPS" : "HTTPS / 证书";
+    $("pageSubtitle").textContent = "管理 Manager 站点的 ACME 证书与 HTTPS。";
   } else {
     $("pageTitle").textContent = item ? item.name : "连接管理";
     $("pageSubtitle").textContent = "保存多个 CLI Endpoint，并切换当前服务器。";
@@ -115,9 +122,11 @@ function setView(view) {
   $("overviewView").classList.toggle("hidden", view !== "overview");
   $("sitesView").classList.toggle("hidden", view !== "sites");
   $("snapshotsView").classList.toggle("hidden", view !== "snapshots");
+  $("certificatesView").classList.toggle("hidden", view !== "certificates");
   updateHeader();
   if (view === "sites") loadSites();
   if (view === "snapshots") loadSnapshots();
+  if (view === "certificates") loadCertificates();
 }
 
 document.querySelectorAll(".nav-item").forEach((item) => {
@@ -180,6 +189,8 @@ $("deleteBtn").onclick = async () => {
   state.selected = "";
   state.sites = [];
   state.snapshots = [];
+  state.certificates = [];
+  state.certbot = null;
   await refresh();
 };
 
@@ -239,6 +250,7 @@ function renderSites() {
         '<div class="site-tags">' +
           '<span class="mini-badge ' + (site.enabled ? "ok" : "") + '">' + (site.enabled ? "已启用" : "未启用") + '</span>' +
           '<span class="mini-badge ' + (site.managed ? "managed" : "") + '">' + (site.managed ? "Manager 管理" : "外部配置") + '</span>' +
+          (site.https ? '<span class="mini-badge https">HTTPS' + (site.redirect_https ? ' · 强制' : '') + '</span>' : '') +
         '</div>' +
       '</div>';
 
@@ -388,6 +400,159 @@ function formatSnapshotTime(value) {
   if (Number.isNaN(date.getTime())) return value || "未知时间";
   return date.toLocaleString("zh-CN", { hour12: false });
 }
+
+$("refreshCertificatesBtn").onclick = loadCertificates;
+
+async function loadCertificates() {
+  if (!state.selected) {
+    state.certificates = [];
+    state.certbot = null;
+    renderCertificates();
+    renderCertificateSites();
+    $("certificateMessage").textContent = "请先选择一个 CLI 连接。";
+    return;
+  }
+
+  $("certificatesList").innerHTML = '<div class="empty large">正在读取证书…</div>';
+  try {
+    const certificateResult = await api().ListCertificates(state.selected);
+    const siteResult = await api().ListSites(state.selected);
+    state.certificates = certificateResult.certificates || [];
+    state.certbot = certificateResult.certbot || null;
+    state.sites = siteResult.sites || [];
+    renderCertificates();
+    renderCertificateSites();
+    $("certificateMessage").textContent = "已读取 " + state.certificates.length + " 张证书。";
+  } catch (err) {
+    state.certificates = [];
+    state.certbot = null;
+    renderCertificates();
+    renderCertificateSites();
+    $("certificateMessage").textContent = cleanError(err);
+  }
+}
+
+function renderCertificates() {
+  const root = $("certificatesList");
+  root.innerHTML = "";
+
+  const certbotReady = Boolean(state.certbot?.available);
+  $("issueCertificateBtn").disabled = !certbotReady;
+  $("renewCertificatesBtn").disabled = !certbotReady;
+  if (certbotReady) {
+    $("certbotValue").textContent = "Certbot 已就绪 · " + (state.certbot.version || state.certbot.path || "可用");
+  } else {
+    $("certbotValue").textContent = "Certbot 未安装或不在 PATH 中；签发和续期功能不可用。";
+  }
+
+  if (!state.certificates.length) {
+    root.innerHTML = '<div class="empty large">没有发现 Let’s Encrypt / Certbot 证书</div>';
+    return;
+  }
+
+  for (const certificate of state.certificates) {
+    const item = document.createElement("div");
+    item.className = "certificate-row";
+
+    const domains = (certificate.domains || []).join(", ") || certificate.name;
+    const expiry = certificateExpiry(certificate.not_after);
+    item.innerHTML =
+      '<div class="certificate-main">' +
+        '<strong>' + escapeHtml(certificate.name) + '</strong>' +
+        '<span>' + escapeHtml(domains) + '</span>' +
+      '</div>' +
+      '<div class="certificate-side">' +
+        '<span class="mini-badge ' + (expiry.days >= 30 ? "ok" : "warn") + '">' +
+          escapeHtml(expiry.label) +
+        '</span>' +
+        '<span class="certificate-date">' + escapeHtml(formatSnapshotTime(certificate.not_after)) + '</span>' +
+      '</div>';
+    root.appendChild(item);
+  }
+}
+
+function renderCertificateSites() {
+  const select = $("certificateSite");
+  select.innerHTML = "";
+
+  const candidates = state.sites.filter((site) =>
+    site.managed && site.enabled && site.proxy_pass && site.server_name && site.server_name !== "_"
+  );
+
+  if (!candidates.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "没有可签发 HTTPS 的 Manager 站点";
+    select.appendChild(option);
+    return;
+  }
+
+  for (const site of candidates) {
+    const option = document.createElement("option");
+    option.value = site.id;
+    option.textContent =
+      site.server_name + (site.https ? " · 已启用 HTTPS" : " · HTTP");
+    select.appendChild(option);
+  }
+}
+
+function certificateExpiry(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return { days: -1, label: "到期时间未知" };
+  const days = Math.ceil((date.getTime() - Date.now()) / 86400000);
+  if (days < 0) return { days, label: "已过期 " + Math.abs(days) + " 天" };
+  return { days, label: days + " 天后到期" };
+}
+
+$("issueCertificateBtn").onclick = async () => {
+  if (!state.selected) {
+    $("certificateMessage").textContent = "请先选择一个 CLI 连接。";
+    return;
+  }
+  const siteID = $("certificateSite").value;
+  const email = $("certificateEmail").value.trim();
+  if (!siteID) {
+    $("certificateMessage").textContent = "请选择一个 Manager 站点。";
+    return;
+  }
+  if (!email) {
+    $("certificateMessage").textContent = "请输入 ACME 联系邮箱。";
+    return;
+  }
+
+  $("issueCertificateBtn").disabled = true;
+  $("certificateMessage").textContent = "正在准备 HTTP-01 Challenge、签发证书并应用 HTTPS…";
+  try {
+    const site = await api().IssueCertificate(state.selected, siteID, {
+      email: email,
+      redirect_https: $("redirectHTTPS").checked
+    });
+    $("certificateMessage").textContent = "HTTPS 已启用：" + (site.server_name || site.id);
+    await loadCertificates();
+  } catch (err) {
+    $("certificateMessage").textContent = cleanError(err);
+  } finally {
+    $("issueCertificateBtn").disabled = false;
+  }
+};
+
+$("renewCertificatesBtn").onclick = async () => {
+  if (!state.selected) {
+    $("certificateMessage").textContent = "请先选择一个 CLI 连接。";
+    return;
+  }
+  $("renewCertificatesBtn").disabled = true;
+  $("certificateMessage").textContent = "正在执行 Certbot 续期检查…";
+  try {
+    const result = await api().RenewCertificates(state.selected);
+    $("certificateMessage").textContent = "续期检查完成。" + (result.output ? "\n" + result.output : "");
+    await loadCertificates();
+  } catch (err) {
+    $("certificateMessage").textContent = cleanError(err);
+  } finally {
+    $("renewCertificatesBtn").disabled = false;
+  }
+};
 
 function resetProxyEditor() {
   state.editingSiteID = "";

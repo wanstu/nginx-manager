@@ -21,6 +21,7 @@
         <button class="nav-item active" data-view="overview">总览与连接</button>
         <button class="nav-item" data-view="sites">站点与反向代理</button>
         <button class="nav-item" data-view="snapshots">快照与恢复</button>
+        <button class="nav-item" data-view="certificates">HTTPS / 证书</button>
       </nav>
 
       <div class="sidebar-note">
@@ -124,6 +125,49 @@
             <div class="empty large">尚未读取快照</div>
           </div>
           <pre id="snapshotMessage">停用、删除或恢复前会自动保留可回滚快照。</pre>
+        </section>
+      </div>
+
+      <div id="certificatesView" class="view hidden">
+        <section class="card">
+          <div class="section-title inline">
+            <div>
+              <h2>证书</h2>
+              <p id="certbotValue">正在等待读取 Certbot 状态。</p>
+            </div>
+            <div class="actions">
+              <button id="renewCertificatesBtn">检查续期</button>
+              <button id="refreshCertificatesBtn">刷新</button>
+            </div>
+          </div>
+          <div id="certificatesList" class="certificate-list">
+            <div class="empty large">尚未读取证书</div>
+          </div>
+          <pre id="certificateMessage">证书操作由受限 root helper 执行，Desktop 不直接运行 Certbot。</pre>
+        </section>
+
+        <section class="card">
+          <div class="section-title">
+            <div>
+              <h2>为站点启用 HTTPS</h2>
+              <p>使用 Certbot HTTP-01 Webroot 签发；Nginx 配置仍由 Nginx Manager 事务管理。</p>
+            </div>
+          </div>
+          <div class="grid">
+            <label>Manager 站点
+              <select id="certificateSite"></select>
+            </label>
+            <label>ACME 联系邮箱
+              <input id="certificateEmail" type="email" placeholder="admin@example.com">
+            </label>
+          </div>
+          <label class="check-row">
+            <input id="redirectHTTPS" type="checkbox" checked>
+            <span>HTTP 自动 301 跳转 HTTPS（ACME Challenge 路径除外）</span>
+          </label>
+          <div class="actions">
+            <button id="issueCertificateBtn" class="primary">申请 / 更新证书并启用 HTTPS</button>
+          </div>
         </section>
       </div>
     </main>

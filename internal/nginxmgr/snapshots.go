@@ -221,5 +221,6 @@ func parseManagedSite(siteID, actualPath string, enabled bool, content []byte) S
 		site.ProxyPass = strings.TrimSpace(match[1])
 	}
 	site.WebSocket = websocketEnabled(text)
+	applyTLSFields(&site, text)
 	return site
 }

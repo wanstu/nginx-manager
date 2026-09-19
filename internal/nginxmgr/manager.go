@@ -23,8 +23,9 @@ const managedMarker = "# managed-by: nginx-manager"
 var mutationMu sync.Mutex
 
 var (
-	serverNameRE = regexp.MustCompile("(?m)^\\s*server_name\\s+([^;]+);")
-	proxyPassRE  = regexp.MustCompile("(?m)^\\s*proxy_pass\\s+([^;]+);")
+	serverNameRE     = regexp.MustCompile("(?m)^\\s*server_name\\s+([^;]+);")
+	proxyPassRE      = regexp.MustCompile("(?m)^\\s*proxy_pass\\s+([^;]+);")
+	sslCertificateRE = regexp.MustCompile("(?m)^\\s*ssl_certificate\\s+([^;]+);")
 )
 
 type RuntimeInfo struct {
@@ -42,13 +43,16 @@ type Layout struct {
 }
 
 type Site struct {
-	ID         string `json:"id"`
-	ServerName string `json:"server_name"`
-	ProxyPass  string `json:"proxy_pass,omitempty"`
-	Enabled    bool   `json:"enabled"`
-	Managed    bool   `json:"managed"`
-	WebSocket  bool   `json:"websocket"`
-	Path       string `json:"path"`
+	ID            string `json:"id"`
+	ServerName    string `json:"server_name"`
+	ProxyPass     string `json:"proxy_pass,omitempty"`
+	Enabled       bool   `json:"enabled"`
+	Managed       bool   `json:"managed"`
+	WebSocket     bool   `json:"websocket"`
+	HTTPS         bool   `json:"https"`
+	RedirectHTTPS bool   `json:"redirect_https"`
+	Certificate   string `json:"certificate,omitempty"`
+	Path          string `json:"path"`
 }
 
 type ReverseProxyRequest struct {
@@ -197,6 +201,7 @@ func (m *Manager) ListSites() ([]Site, error) {
 			site.ProxyPass = strings.TrimSpace(match[1])
 		}
 		site.WebSocket = websocketEnabled(text)
+		applyTLSFields(&site, text)
 		sites = append(sites, site)
 	}
 	sort.Slice(sites, func(i, j int) bool {
@@ -303,13 +308,60 @@ func siteFileName(serverName, mode string) string {
 }
 
 func renderReverseProxy(serverName, upstream string, websocket bool) []byte {
+	return renderReverseProxyManaged(serverName, upstream, websocket, nil, "")
+}
+
+func renderReverseProxyManaged(serverName, upstream string, websocket bool, tls *TLSConfig, acmeRoot string) []byte {
 	var b strings.Builder
 	b.WriteString(managedMarker + "\n")
 	b.WriteString("# generated; edit through nginx-manager\n")
+	if tls != nil {
+		b.WriteString(certificateMarkerPrefix + tls.CertificateName + "\n")
+		if tls.RedirectHTTPS {
+			b.WriteString(redirectHTTPSMarker + "\n")
+		}
+	}
+	b.WriteString("\n")
+
 	b.WriteString("server {\n")
 	b.WriteString("    listen 80;\n")
 	b.WriteString("    listen [::]:80;\n")
 	b.WriteString("    server_name " + serverName + ";\n\n")
+	writeACMELocation(&b, acmeRoot)
+	if tls != nil && tls.RedirectHTTPS {
+		b.WriteString("    location / {\n")
+		b.WriteString("        return 301 https://$host$request_uri;\n")
+		b.WriteString("    }\n")
+	} else {
+		writeProxyLocation(&b, upstream, websocket)
+	}
+	b.WriteString("}\n")
+
+	if tls != nil {
+		b.WriteString("\nserver {\n")
+		b.WriteString("    listen 443 ssl;\n")
+		b.WriteString("    listen [::]:443 ssl;\n")
+		b.WriteString("    server_name " + serverName + ";\n")
+		b.WriteString("    ssl_certificate " + tls.FullchainPath + ";\n")
+		b.WriteString("    ssl_certificate_key " + tls.PrivateKeyPath + ";\n\n")
+		writeProxyLocation(&b, upstream, websocket)
+		b.WriteString("}\n")
+	}
+	return []byte(b.String())
+}
+
+func writeACMELocation(b *strings.Builder, acmeRoot string) {
+	if strings.TrimSpace(acmeRoot) == "" {
+		return
+	}
+	b.WriteString("    location ^~ /.well-known/acme-challenge/ {\n")
+	b.WriteString("        root " + nginxQuote(acmeRoot) + ";\n")
+	b.WriteString("        default_type text/plain;\n")
+	b.WriteString("        try_files $uri =404;\n")
+	b.WriteString("    }\n\n")
+}
+
+func writeProxyLocation(b *strings.Builder, upstream string, websocket bool) {
 	b.WriteString("    location / {\n")
 	b.WriteString("        proxy_pass " + upstream + ";\n")
 	b.WriteString("        proxy_http_version 1.1;\n")
@@ -322,8 +374,6 @@ func renderReverseProxy(serverName, upstream string, websocket bool) []byte {
 		b.WriteString("        proxy_set_header Connection \"upgrade\";\n")
 	}
 	b.WriteString("    }\n")
-	b.WriteString("}\n")
-	return []byte(b.String())
 }
 
 func (m *Manager) validateCandidate(ctx context.Context, name string, content []byte) error {

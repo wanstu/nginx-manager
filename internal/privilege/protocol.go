@@ -10,12 +10,16 @@ const (
 	OperationDeleteSite         = "delete_site"
 	OperationListSnapshots      = "list_snapshots"
 	OperationRestoreSnapshot    = "restore_snapshot"
+	OperationListCertificates   = "list_certificates"
+	OperationIssueCertificate   = "issue_certificate"
+	OperationRenewCertificates  = "renew_certificates"
 )
 
 type ApplyRequest struct {
 	Operation  string
 	Create     *nginxmgr.ReverseProxyRequest
 	Update     *nginxmgr.UpdateReverseProxyRequest
+	Issue      *nginxmgr.IssueCertificateRequest
 	SiteID     string
 	Enabled    bool
 	SnapshotID string
@@ -23,13 +27,16 @@ type ApplyRequest struct {
 }
 
 type ApplyResponse struct {
-	OK         bool
-	Error      string
-	Apply      *nginxmgr.ApplyResult
-	Site       *nginxmgr.Site
-	Runtime    *nginxmgr.RuntimeInfo
-	Layout     *nginxmgr.Layout
-	ConfigOK   bool
-	TestOutput string
-	Snapshots  []nginxmgr.SnapshotMeta
+	OK           bool
+	Error        string
+	Apply        *nginxmgr.ApplyResult
+	Site         *nginxmgr.Site
+	Runtime      *nginxmgr.RuntimeInfo
+	Layout       *nginxmgr.Layout
+	ConfigOK     bool
+	TestOutput   string
+	Snapshots    []nginxmgr.SnapshotMeta
+	Certificates []nginxmgr.Certificate
+	Certbot      *nginxmgr.CertbotStatus
+	Output       string
 }
