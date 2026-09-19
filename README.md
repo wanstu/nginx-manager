@@ -38,6 +38,8 @@ GET    /api/v1/sites                     Basic Auth
 POST   /api/v1/sites/reverse-proxy       Basic Auth
 PUT    /api/v1/sites/{id}/enabled        Basic Auth
 DELETE /api/v1/sites/{id}                Basic Auth
+GET    /api/v1/snapshots                 Basic Auth
+POST   /api/v1/snapshots/{id}/restore    Basic Auth
 ```
 
 Basic Auth 用户名固定为 `admin`，密码为 CLI 初始化时设置的管理密码。
@@ -94,6 +96,8 @@ Desktop 当前能：
 - 独立检查受限 root helper / `nginx -t` 是否就绪；
 - 读取当前服务器站点并区分 Manager 管理 / 外部配置；
 - 创建反向代理，并展示事务执行结果；
-- 启用、停用、删除 Manager 管理的站点。
+- 启用、停用、删除 Manager 管理的站点；
+- 查看最近的配置快照；
+- 事务恢复历史快照，恢复前再次自动保存当前状态。
 
-下一阶段：编辑 Manager 站点、快照历史与恢复、证书 / ACME、访问日志与错误日志。
+下一阶段：编辑 Manager 站点、证书 / ACME、访问日志与错误日志。

@@ -275,6 +275,117 @@ func TestDeleteManagedSiteRollbackAndExternalProtection(t *testing.T) {
 	}
 }
 
+func TestSnapshotListAndRestoreDeletedSite(t *testing.T) {
+	snapshotDir := t.TempDir()
+	t.Setenv("NGINX_MANAGER_SNAPSHOT_DIR", snapshotDir)
+	runner := &scriptedRunner{results: []runnerResult{
+		{output: "delete test ok"},
+		{output: "delete reload ok"},
+		{output: "candidate ok"},
+		{output: "restore test ok"},
+		{output: "restore reload ok"},
+	}}
+	manager := newTestManager(t, runner)
+
+	path := filepath.Join(manager.Layout.AvailableDir, "nginx-manager-snapshot.example.com.conf")
+	original := renderReverseProxy("snapshot.example.com", "http://127.0.0.1:8002", false)
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := manager.DeleteSite(context.Background(), "nginx-manager-snapshot.example.com.conf"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("deleted site still exists: %v", err)
+	}
+
+	snapshots, err := manager.ListSnapshots(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || snapshots[0].Operation != "delete" {
+		t.Fatalf("snapshots = %+v", snapshots)
+	}
+
+	restored, err := manager.RestoreSnapshot(context.Background(), snapshots[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ServerName != "snapshot.example.com" || !restored.Enabled {
+		t.Fatalf("restored site = %+v", restored)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(original) {
+		t.Fatal("restored content differs from snapshot")
+	}
+}
+
+func TestRestoreSnapshotReloadFailureRestoresCurrentState(t *testing.T) {
+	snapshotDir := t.TempDir()
+	t.Setenv("NGINX_MANAGER_SNAPSHOT_DIR", snapshotDir)
+
+	initialRunner := &scriptedRunner{results: []runnerResult{
+		{output: "disable test ok"},
+		{output: "disable reload ok"},
+	}}
+	manager := newTestManager(t, initialRunner)
+	siteID := "nginx-manager-restore-rollback.example.com.conf"
+	path := filepath.Join(manager.Layout.AvailableDir, siteID)
+	oldContent := renderReverseProxy("restore-rollback.example.com", "http://127.0.0.1:8002", false)
+	if err := os.WriteFile(path, oldContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.SetSiteEnabled(context.Background(), siteID, false); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshots, err := manager.ListSnapshots(10)
+	if err != nil || len(snapshots) != 1 {
+		t.Fatalf("snapshots = %+v, err=%v", snapshots, err)
+	}
+
+	disabledPath := path + ".disabled"
+	if err := os.Remove(disabledPath); err != nil {
+		t.Fatal(err)
+	}
+	currentContent := renderReverseProxy("restore-rollback.example.com", "http://127.0.0.1:9000", false)
+	if err := os.WriteFile(path, currentContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.Runner = &scriptedRunner{results: []runnerResult{
+		{output: "candidate ok"},
+		{output: "restore test ok"},
+		{output: "restore reload failed", err: errors.New("exit 1")},
+		{output: "rollback test ok"},
+		{output: "rollback reload ok"},
+	}}
+	_, err = manager.RestoreSnapshot(context.Background(), snapshots[0].ID)
+	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("restore error = %v", err)
+	}
+
+	data, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(data) != string(currentContent) {
+		t.Fatal("current site was not restored after failed snapshot reload")
+	}
+
+	snapshots, err = manager.ListSnapshots(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 2 || snapshots[0].Operation != "restore_before" {
+		t.Fatalf("snapshots after restore failure = %+v", snapshots)
+	}
+}
+
 func TestValidationRejectsUnsafeInput(t *testing.T) {
 	manager := newTestManager(t, &scriptedRunner{})
 	cases := []ReverseProxyRequest{

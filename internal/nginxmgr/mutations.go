@@ -13,6 +13,11 @@ import (
 	"github.com/wanstu/wails-desktop-kit/atomicfile"
 )
 
+var (
+	ErrManagedSiteNotFound   = errors.New("managed site not found")
+	ErrExternalConfiguration = errors.New("refusing to mutate external nginx configuration")
+)
+
 type Snapshot struct {
 	ID        string
 	CreatedAt time.Time
@@ -101,18 +106,25 @@ func (m *Manager) DeleteSite(ctx context.Context, siteID string) (Site, error) {
 	return state.Site, nil
 }
 
-func (m *Manager) loadManagedSite(siteID string) (managedSiteState, error) {
+func (m *Manager) validateManagedSiteID(siteID string) error {
 	if filepath.Base(siteID) != siteID ||
 		strings.ContainsAny(siteID, "/\\\x00\r\n") ||
 		!strings.HasPrefix(siteID, "nginx-manager-") {
-		return managedSiteState{}, errors.New("invalid managed site id")
+		return errors.New("invalid managed site id")
+	}
+	if m.Layout.Mode == "conf.d" && !strings.HasSuffix(siteID, ".conf") {
+		return errors.New("invalid conf.d managed site id")
+	}
+	return nil
+}
+
+func (m *Manager) loadManagedSite(siteID string) (managedSiteState, error) {
+	if err := m.validateManagedSiteID(siteID); err != nil {
+		return managedSiteState{}, err
 	}
 
 	candidates := []string{filepath.Join(m.Layout.AvailableDir, siteID)}
 	if m.Layout.Mode == "conf.d" {
-		if !strings.HasSuffix(siteID, ".conf") {
-			return managedSiteState{}, errors.New("invalid conf.d managed site id")
-		}
 		candidates = append(candidates, filepath.Join(m.Layout.AvailableDir, siteID+".disabled"))
 	}
 
@@ -130,10 +142,18 @@ func (m *Manager) loadManagedSite(siteID string) (managedSiteState, error) {
 		}
 	}
 	if actual == "" {
-		return managedSiteState{}, errors.New("managed site not found")
+		if m.Layout.Mode == "sites-enabled" {
+			link := filepath.Join(m.Layout.EnabledDir, siteID)
+			if _, err := os.Lstat(link); err == nil {
+				return managedSiteState{}, ErrExternalConfiguration
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return managedSiteState{}, fmt.Errorf("inspect enabled site link: %w", err)
+			}
+		}
+		return managedSiteState{}, ErrManagedSiteNotFound
 	}
 	if !strings.Contains(string(data), managedMarker) {
-		return managedSiteState{}, errors.New("refusing to mutate external nginx configuration")
+		return managedSiteState{}, ErrExternalConfiguration
 	}
 
 	site := Site{
@@ -223,11 +243,16 @@ func (m *Manager) testAndReload(ctx context.Context, rollback func()) error {
 	return fmt.Errorf("nginx reload failed; rolled back: %s", reloadOutput)
 }
 
-func (m *Manager) snapshotSite(operation string, state managedSiteState) error {
+func snapshotRoot() string {
 	root := strings.TrimSpace(os.Getenv("NGINX_MANAGER_SNAPSHOT_DIR"))
 	if root == "" {
 		root = "/var/lib/nginx-manager/snapshots"
 	}
+	return root
+}
+
+func (m *Manager) snapshotSite(operation string, state managedSiteState) error {
+	root := snapshotRoot()
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return fmt.Errorf("create snapshot directory: %w", err)
 	}

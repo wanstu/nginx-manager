@@ -92,6 +92,18 @@ type CreateReverseProxyResult struct {
 	TestOutput string     `json:"test_output"`
 }
 
+type RemoteSnapshot struct {
+	ID        string `json:"id"`
+	CreatedAt string `json:"created_at"`
+	Operation string `json:"operation"`
+	SiteID    string `json:"site_id"`
+	Enabled   bool   `json:"enabled"`
+}
+
+type SnapshotListResult struct {
+	Snapshots []RemoteSnapshot `json:"snapshots"`
+}
+
 type App struct {
 	settings *jsonstore.Store[Settings]
 	secure   *secureconfig.Store
@@ -359,6 +371,26 @@ func (a *App) CreateReverseProxy(id string, req CreateReverseProxyRequest) (Crea
 		return CreateReverseProxyResult{}, err
 	}
 	return result, nil
+}
+
+func (a *App) ListSnapshots(id string) ([]RemoteSnapshot, error) {
+	var result SnapshotListResult
+	if err := a.requestJSON(id, http.MethodGet, "/api/v1/snapshots?limit=50", nil, &result); err != nil {
+		return nil, err
+	}
+	if result.Snapshots == nil {
+		result.Snapshots = []RemoteSnapshot{}
+	}
+	return result.Snapshots, nil
+}
+
+func (a *App) RestoreSnapshot(id, snapshotID string) (RemoteSite, error) {
+	var site RemoteSite
+	path := "/api/v1/snapshots/" + url.PathEscape(snapshotID) + "/restore"
+	if err := a.requestJSON(id, http.MethodPost, path, nil, &site); err != nil {
+		return RemoteSite{}, err
+	}
+	return site, nil
 }
 
 func (a *App) SetSiteEnabled(id, siteID string, enabled bool) (RemoteSite, error) {

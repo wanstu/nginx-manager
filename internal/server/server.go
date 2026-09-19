@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -235,6 +236,43 @@ func Serve(ctx context.Context, listen, version string) error {
 		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
 			Operation: privilege.OperationDeleteSite,
 			SiteID:    r.PathValue("id"),
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusConflict, err)
+			return
+		}
+		if response.Site == nil {
+			writeAPIError(w, http.StatusInternalServerError, errors.New("privileged helper returned no site result"))
+			return
+		}
+		writeJSON(w, http.StatusOK, response.Site)
+	})
+
+	protected("GET /api/v1/snapshots", func(w http.ResponseWriter, r *http.Request) {
+		limit := 50
+		if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+			value, err := strconv.Atoi(raw)
+			if err != nil || value < 1 || value > 100 {
+				writeAPIError(w, http.StatusBadRequest, errors.New("limit must be between 1 and 100"))
+				return
+			}
+			limit = value
+		}
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationListSnapshots,
+			Limit:     limit,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"snapshots": response.Snapshots})
+	})
+
+	protected("POST /api/v1/snapshots/{id}/restore", func(w http.ResponseWriter, r *http.Request) {
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation:  privilege.OperationRestoreSnapshot,
+			SnapshotID: r.PathValue("id"),
 		})
 		if err != nil {
 			writeAPIError(w, http.StatusConflict, err)

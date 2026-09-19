@@ -3,7 +3,8 @@ const state = {
   selected: "",
   view: "overview",
   sites: [],
-  layout: null
+  layout: null,
+  snapshots: []
 };
 
 function api() {
@@ -25,6 +26,7 @@ async function refresh() {
   if (state.selected) {
     loadEditor(state.selected);
     if (state.view === "sites") await loadSites();
+    if (state.view === "snapshots") await loadSnapshots();
   } else {
     clearEditor(false);
   }
@@ -52,6 +54,7 @@ function renderConnections() {
       renderConnections();
       loadEditor(item.id);
       if (state.view === "sites") await loadSites();
+      if (state.view === "snapshots") await loadSnapshots();
     };
     root.appendChild(button);
   }
@@ -92,6 +95,9 @@ function updateHeader() {
   if (state.view === "sites") {
     $("pageTitle").textContent = item ? item.name + " · 站点" : "站点";
     $("pageSubtitle").textContent = "读取和管理当前 CLI 所在服务器的 Nginx / OpenResty 站点。";
+  } else if (state.view === "snapshots") {
+    $("pageTitle").textContent = item ? item.name + " · 快照" : "快照";
+    $("pageSubtitle").textContent = "查看 Manager 变更快照，并通过事务恢复历史配置。";
   } else {
     $("pageTitle").textContent = item ? item.name : "连接管理";
     $("pageSubtitle").textContent = "保存多个 CLI Endpoint，并切换当前服务器。";
@@ -105,8 +111,10 @@ function setView(view) {
   });
   $("overviewView").classList.toggle("hidden", view !== "overview");
   $("sitesView").classList.toggle("hidden", view !== "sites");
+  $("snapshotsView").classList.toggle("hidden", view !== "snapshots");
   updateHeader();
   if (view === "sites") loadSites();
+  if (view === "snapshots") loadSnapshots();
 }
 
 document.querySelectorAll(".nav-item").forEach((item) => {
@@ -168,6 +176,7 @@ $("deleteBtn").onclick = async () => {
   await api().DeleteConnection(state.selected);
   state.selected = "";
   state.sites = [];
+  state.snapshots = [];
   await refresh();
 };
 
@@ -273,6 +282,90 @@ function renderSites() {
 
     root.appendChild(item);
   }
+}
+
+$("refreshSnapshotsBtn").onclick = loadSnapshots;
+
+async function loadSnapshots() {
+  if (!state.selected) {
+    state.snapshots = [];
+    renderSnapshots();
+    $("snapshotMessage").textContent = "请先选择一个 CLI 连接。";
+    return;
+  }
+
+  $("snapshotsList").innerHTML = '<div class="empty large">正在读取快照…</div>';
+  try {
+    state.snapshots = await api().ListSnapshots(state.selected);
+    state.snapshots = state.snapshots || [];
+    renderSnapshots();
+    $("snapshotMessage").textContent = "已读取最近 " + state.snapshots.length + " 个快照。";
+  } catch (err) {
+    state.snapshots = [];
+    renderSnapshots();
+    $("snapshotMessage").textContent = cleanError(err);
+  }
+}
+
+function renderSnapshots() {
+  const root = $("snapshotsList");
+  root.innerHTML = "";
+
+  if (!state.snapshots.length) {
+    root.innerHTML = '<div class="empty large">还没有配置快照</div>';
+    return;
+  }
+
+  for (const snapshot of state.snapshots) {
+    const item = document.createElement("div");
+    item.className = "snapshot-row";
+
+    const operation = formatSnapshotOperation(snapshot.operation);
+    const time = formatSnapshotTime(snapshot.created_at);
+    item.innerHTML =
+      '<div class="snapshot-main">' +
+        '<strong>' + escapeHtml(snapshot.site_id) + '</strong>' +
+        '<span>' + escapeHtml(operation + " · " + time) + '</span>' +
+      '</div>' +
+      '<div class="snapshot-side">' +
+        '<span class="mini-badge ' + (snapshot.enabled ? "ok" : "") + '">' +
+          (snapshot.enabled ? "快照时已启用" : "快照时未启用") +
+        '</span>' +
+      '</div>';
+
+    const restore = document.createElement("button");
+    restore.textContent = "恢复";
+    restore.onclick = async () => {
+      if (!confirm("恢复此快照？当前 Manager 配置会先自动创建一个“恢复前”快照。")) return;
+      restore.disabled = true;
+      $("snapshotMessage").textContent = "正在验证并恢复 " + snapshot.site_id + "…";
+      try {
+        const site = await api().RestoreSnapshot(state.selected, snapshot.id);
+        $("snapshotMessage").textContent = "恢复成功：" + (site.server_name || site.id);
+        await loadSnapshots();
+      } catch (err) {
+        $("snapshotMessage").textContent = cleanError(err);
+      } finally {
+        restore.disabled = false;
+      }
+    };
+
+    item.querySelector(".snapshot-side").appendChild(restore);
+    root.appendChild(item);
+  }
+}
+
+function formatSnapshotOperation(value) {
+  if (value === "delete") return "删除前";
+  if (value === "set_enabled") return "启停前";
+  if (value === "restore_before") return "恢复前";
+  return value || "未知操作";
+}
+
+function formatSnapshotTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value || "未知时间";
+  return date.toLocaleString("zh-CN", { hour12: false });
 }
 
 $("createProxyBtn").onclick = async () => {

@@ -20,6 +20,7 @@
       <nav class="side-nav">
         <button class="nav-item active" data-view="overview">总览与连接</button>
         <button class="nav-item" data-view="sites">站点与反向代理</button>
+        <button class="nav-item" data-view="snapshots">快照与恢复</button>
       </nav>
 
       <div class="sidebar-note">
@@ -106,6 +107,22 @@
             <button id="createProxyBtn" class="primary">创建并应用</button>
           </div>
           <pre id="siteMessage">创建操作会经过候选测试、全局 nginx -t、原子写入和 reload。</pre>
+        </section>
+      </div>
+
+      <div id="snapshotsView" class="view hidden">
+        <section class="card">
+          <div class="section-title inline">
+            <div>
+              <h2>配置快照</h2>
+              <p>只展示快照元数据；配置正文保留在服务器 root-only 快照目录。</p>
+            </div>
+            <button id="refreshSnapshotsBtn">刷新</button>
+          </div>
+          <div id="snapshotsList" class="snapshot-list">
+            <div class="empty large">尚未读取快照</div>
+          </div>
+          <pre id="snapshotMessage">停用、删除或恢复前会自动保留可回滚快照。</pre>
         </section>
       </div>
     </main>

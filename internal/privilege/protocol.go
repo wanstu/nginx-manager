@@ -7,13 +7,17 @@ const (
 	OperationCreateReverseProxy = "create_reverse_proxy"
 	OperationSetSiteEnabled     = "set_site_enabled"
 	OperationDeleteSite         = "delete_site"
+	OperationListSnapshots      = "list_snapshots"
+	OperationRestoreSnapshot    = "restore_snapshot"
 )
 
 type ApplyRequest struct {
-	Operation string
-	Create    *nginxmgr.ReverseProxyRequest
-	SiteID    string
-	Enabled   bool
+	Operation  string
+	Create     *nginxmgr.ReverseProxyRequest
+	SiteID     string
+	Enabled    bool
+	SnapshotID string
+	Limit      int
 }
 
 type ApplyResponse struct {
@@ -25,4 +29,5 @@ type ApplyResponse struct {
 	Layout     *nginxmgr.Layout
 	ConfigOK   bool
 	TestOutput string
+	Snapshots  []nginxmgr.SnapshotMeta
 }
