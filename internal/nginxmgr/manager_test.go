@@ -275,6 +275,97 @@ func TestDeleteManagedSiteRollbackAndExternalProtection(t *testing.T) {
 	}
 }
 
+func TestUpdateReverseProxyRenamesAndSnapshots(t *testing.T) {
+	t.Setenv("NGINX_MANAGER_SNAPSHOT_DIR", t.TempDir())
+	runner := &scriptedRunner{results: []runnerResult{
+		{output: "candidate ok"},
+		{output: "live ok"},
+		{output: "reload ok"},
+	}}
+	manager := newTestManager(t, runner)
+
+	oldID := "nginx-manager-old.example.com.conf"
+	oldPath := filepath.Join(manager.Layout.AvailableDir, oldID)
+	oldContent := renderReverseProxy("old.example.com", "http://127.0.0.1:8002", false)
+	if err := os.WriteFile(oldPath, oldContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := manager.UpdateReverseProxy(context.Background(), oldID, UpdateReverseProxyRequest{
+		ServerName: "new.example.com",
+		Upstream:   "http://127.0.0.1:9000/",
+		WebSocket:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Site.ID != "nginx-manager-new.example.com.conf" ||
+		result.Site.ServerName != "new.example.com" ||
+		result.Site.ProxyPass != "http://127.0.0.1:9000/" ||
+		!result.Site.WebSocket {
+		t.Fatalf("updated site = %+v", result.Site)
+	}
+	if _, err := os.Stat(oldPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old site still exists: %v", err)
+	}
+	newPath := filepath.Join(manager.Layout.AvailableDir, result.Site.ID)
+	data, err := os.ReadFile(newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "proxy_pass http://127.0.0.1:9000/;") {
+		t.Fatalf("updated content = %s", data)
+	}
+
+	snapshots, err := manager.ListSnapshots(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || snapshots[0].Operation != "update" || snapshots[0].SiteID != oldID {
+		t.Fatalf("snapshots = %+v", snapshots)
+	}
+}
+
+func TestUpdateReverseProxyReloadFailureRestoresOldSite(t *testing.T) {
+	t.Setenv("NGINX_MANAGER_SNAPSHOT_DIR", t.TempDir())
+	runner := &scriptedRunner{results: []runnerResult{
+		{output: "candidate ok"},
+		{output: "live ok"},
+		{output: "reload failed", err: errors.New("exit 1")},
+		{output: "rollback test ok"},
+		{output: "rollback reload ok"},
+	}}
+	manager := newTestManager(t, runner)
+
+	oldID := "nginx-manager-update-rollback.example.com.conf"
+	oldPath := filepath.Join(manager.Layout.AvailableDir, oldID)
+	oldContent := renderReverseProxy("update-rollback.example.com", "http://127.0.0.1:8002", false)
+	if err := os.WriteFile(oldPath, oldContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := manager.UpdateReverseProxy(context.Background(), oldID, UpdateReverseProxyRequest{
+		ServerName: "renamed.example.com",
+		Upstream:   "http://127.0.0.1:9000",
+		WebSocket:  true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("update error = %v", err)
+	}
+
+	data, readErr := os.ReadFile(oldPath)
+	if readErr != nil {
+		t.Fatalf("old site not restored: %v", readErr)
+	}
+	if string(data) != string(oldContent) {
+		t.Fatal("old site content changed after rollback")
+	}
+	newPath := filepath.Join(manager.Layout.AvailableDir, "nginx-manager-renamed.example.com.conf")
+	if _, statErr := os.Stat(newPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("renamed site remained after rollback: %v", statErr)
+	}
+}
+
 func TestSnapshotListAndRestoreDeletedSite(t *testing.T) {
 	snapshotDir := t.TempDir()
 	t.Setenv("NGINX_MANAGER_SNAPSHOT_DIR", snapshotDir)

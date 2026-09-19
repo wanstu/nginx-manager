@@ -36,7 +36,8 @@ GET    /api/v1/nginx/status              Basic Auth
 GET    /api/v1/privilege/status          Basic Auth
 GET    /api/v1/sites                     Basic Auth
 POST   /api/v1/sites/reverse-proxy       Basic Auth
-PUT    /api/v1/sites/{id}/enabled        Basic Auth
+PUT    /api/v1/sites/{id}/reverse-proxy   Basic Auth
+PUT    /api/v1/sites/{id}/enabled         Basic Auth
 DELETE /api/v1/sites/{id}                Basic Auth
 GET    /api/v1/snapshots                 Basic Auth
 POST   /api/v1/snapshots/{id}/restore    Basic Auth
@@ -96,8 +97,9 @@ Desktop 当前能：
 - 独立检查受限 root helper / `nginx -t` 是否就绪；
 - 读取当前服务器站点并区分 Manager 管理 / 外部配置；
 - 创建反向代理，并展示事务执行结果；
+- 编辑 Manager 反向代理的域名、上游和 WebSocket 设置；
 - 启用、停用、删除 Manager 管理的站点；
 - 查看最近的配置快照；
 - 事务恢复历史快照，恢复前再次自动保存当前状态。
 
-下一阶段：编辑 Manager 站点、证书 / ACME、访问日志与错误日志。
+下一阶段：证书 / ACME、访问日志与错误日志。

@@ -33,6 +33,86 @@ type managedSiteState struct {
 	ActualPath string
 }
 
+func (m *Manager) UpdateReverseProxy(ctx context.Context, siteID string, req UpdateReverseProxyRequest) (ApplyResult, error) {
+	mutationMu.Lock()
+	defer mutationMu.Unlock()
+
+	current, err := m.loadManagedSite(siteID)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if current.Site.ProxyPass == "" {
+		return ApplyResult{}, errors.New("managed site is not a reverse proxy")
+	}
+
+	serverName, err := validateServerName(req.ServerName)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	upstream, err := validateUpstream(req.Upstream)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	newID := siteFileName(serverName, m.Layout.Mode)
+	if newID != siteID {
+		if err := m.ensureManagedSiteIDAvailable(newID); err != nil {
+			return ApplyResult{}, err
+		}
+	}
+
+	content := renderReverseProxy(serverName, upstream, req.WebSocket)
+	if err := m.validateCandidate(ctx, newID, content); err != nil {
+		return ApplyResult{}, err
+	}
+	if err := m.snapshotSite("update", current); err != nil {
+		return ApplyResult{}, err
+	}
+	if err := m.removeManagedSiteFiles(siteID); err != nil {
+		return ApplyResult{}, err
+	}
+
+	restoreCurrent := func() {
+		_ = m.removeManagedSiteFiles(newID)
+		_ = m.restoreManagedState(current)
+	}
+
+	actualPath := filepath.Join(m.Layout.AvailableDir, newID)
+	if m.Layout.Mode == "conf.d" && !current.Site.Enabled {
+		actualPath += ".disabled"
+	}
+	if err := atomicfile.Write(actualPath, content, 0o644); err != nil {
+		restoreCurrent()
+		return ApplyResult{}, fmt.Errorf("write updated site: %w", err)
+	}
+	if m.Layout.Mode == "sites-enabled" && current.Site.Enabled {
+		if err := m.createEnableSymlink(newID); err != nil {
+			restoreCurrent()
+			return ApplyResult{}, err
+		}
+	}
+	if err := m.testAndReload(ctx, restoreCurrent); err != nil {
+		return ApplyResult{}, err
+	}
+
+	return ApplyResult{
+		Site: parseManagedSite(newID, actualPath, current.Site.Enabled, content),
+	}, nil
+}
+
+func (m *Manager) ensureManagedSiteIDAvailable(siteID string) error {
+	_, err := m.loadManagedSite(siteID)
+	if err == nil {
+		return fmt.Errorf("site %q already exists", siteID)
+	}
+	if errors.Is(err, ErrManagedSiteNotFound) {
+		return nil
+	}
+	if errors.Is(err, ErrExternalConfiguration) {
+		return fmt.Errorf("site %q conflicts with external nginx configuration", siteID)
+	}
+	return err
+}
+
 func (m *Manager) SetSiteEnabled(ctx context.Context, siteID string, enabled bool) (Site, error) {
 	mutationMu.Lock()
 	defer mutationMu.Unlock()
@@ -172,6 +252,7 @@ func (m *Manager) loadManagedSite(siteID string) (managedSiteState, error) {
 	if match := proxyPassRE.FindStringSubmatch(text); len(match) == 2 {
 		site.ProxyPass = strings.TrimSpace(match[1])
 	}
+	site.WebSocket = websocketEnabled(text)
 
 	return managedSiteState{Site: site, Content: data, ActualPath: actual}, nil
 }

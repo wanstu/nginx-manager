@@ -4,7 +4,8 @@ const state = {
   view: "overview",
   sites: [],
   layout: null,
-  snapshots: []
+  snapshots: [],
+  editingSiteID: ""
 };
 
 function api() {
@@ -53,6 +54,7 @@ function renderConnections() {
       await api().SelectConnection(item.id);
       renderConnections();
       loadEditor(item.id);
+      resetProxyEditor();
       if (state.view === "sites") await loadSites();
       if (state.view === "snapshots") await loadSnapshots();
     };
@@ -77,6 +79,7 @@ function clearEditor(resetSelection = true) {
   $("url").value = "";
   $("password").value = "";
   resetStatus();
+  resetProxyEditor();
   updateHeader();
 }
 
@@ -243,6 +246,23 @@ function renderSites() {
       const actions = document.createElement("div");
       actions.className = "site-actions";
 
+      if (site.proxy_pass) {
+        const edit = document.createElement("button");
+        edit.textContent = "编辑";
+        edit.onclick = () => {
+          state.editingSiteID = site.id;
+          $("proxyFormTitle").textContent = "编辑反向代理";
+          $("createProxyBtn").textContent = "保存修改";
+          $("cancelEditProxyBtn").classList.remove("hidden");
+          $("proxyServerName").value = site.server_name || "";
+          $("proxyUpstream").value = site.proxy_pass || "";
+          $("proxyWebSocket").checked = Boolean(site.websocket);
+          $("siteMessage").textContent = "正在编辑：" + title;
+          $("proxyServerName").focus();
+        };
+        actions.appendChild(edit);
+      }
+
       const toggle = document.createElement("button");
       toggle.textContent = site.enabled ? "停用" : "启用";
       toggle.onclick = async () => {
@@ -359,6 +379,7 @@ function formatSnapshotOperation(value) {
   if (value === "delete") return "删除前";
   if (value === "set_enabled") return "启停前";
   if (value === "restore_before") return "恢复前";
+  if (value === "update") return "编辑前";
   return value || "未知操作";
 }
 
@@ -367,6 +388,21 @@ function formatSnapshotTime(value) {
   if (Number.isNaN(date.getTime())) return value || "未知时间";
   return date.toLocaleString("zh-CN", { hour12: false });
 }
+
+function resetProxyEditor() {
+  state.editingSiteID = "";
+  $("proxyFormTitle").textContent = "新建反向代理";
+  $("createProxyBtn").textContent = "创建并应用";
+  $("cancelEditProxyBtn").classList.add("hidden");
+  $("proxyServerName").value = "";
+  $("proxyUpstream").value = "";
+  $("proxyWebSocket").checked = true;
+}
+
+$("cancelEditProxyBtn").onclick = () => {
+  resetProxyEditor();
+  $("siteMessage").textContent = "已取消编辑。";
+};
 
 $("createProxyBtn").onclick = async () => {
   if (!state.selected) {
@@ -382,19 +418,22 @@ $("createProxyBtn").onclick = async () => {
   }
 
   $("createProxyBtn").disabled = true;
-  $("siteMessage").textContent = "正在生成候选配置并执行 nginx -t…";
+  $("siteMessage").textContent = state.editingSiteID ? "正在验证并更新反向代理…" : "正在生成候选配置并执行 nginx -t…";
 
   try {
-    const result = await api().CreateReverseProxy(state.selected, {
+    const request = {
       server_name: serverName,
       upstream: upstream,
       websocket: $("proxyWebSocket").checked
-    });
+    };
+    const editing = state.editingSiteID;
+    const result = editing
+      ? await api().UpdateReverseProxy(state.selected, editing, request)
+      : await api().CreateReverseProxy(state.selected, request);
     $("siteMessage").textContent =
-      "创建成功：" + (result.site?.server_name || serverName) +
+      (editing ? "修改成功：" : "创建成功：") + (result.site?.server_name || serverName) +
       (result.test_output ? "\n" + result.test_output : "");
-    $("proxyServerName").value = "";
-    $("proxyUpstream").value = "";
+    resetProxyEditor();
     await loadSites();
   } catch (err) {
     $("siteMessage").textContent = cleanError(err);

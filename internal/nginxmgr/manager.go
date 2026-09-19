@@ -47,10 +47,17 @@ type Site struct {
 	ProxyPass  string `json:"proxy_pass,omitempty"`
 	Enabled    bool   `json:"enabled"`
 	Managed    bool   `json:"managed"`
+	WebSocket  bool   `json:"websocket"`
 	Path       string `json:"path"`
 }
 
 type ReverseProxyRequest struct {
+	ServerName string `json:"server_name"`
+	Upstream   string `json:"upstream"`
+	WebSocket  bool   `json:"websocket"`
+}
+
+type UpdateReverseProxyRequest struct {
 	ServerName string `json:"server_name"`
 	Upstream   string `json:"upstream"`
 	WebSocket  bool   `json:"websocket"`
@@ -189,6 +196,7 @@ func (m *Manager) ListSites() ([]Site, error) {
 		if match := proxyPassRE.FindStringSubmatch(text); len(match) == 2 {
 			site.ProxyPass = strings.TrimSpace(match[1])
 		}
+		site.WebSocket = websocketEnabled(text)
 		sites = append(sites, site)
 	}
 	sort.Slice(sites, func(i, j int) bool {
@@ -202,6 +210,11 @@ func (m *Manager) ListSites() ([]Site, error) {
 		return left < right
 	})
 	return sites, nil
+}
+
+func websocketEnabled(text string) bool {
+	return strings.Contains(text, "proxy_set_header Upgrade $http_upgrade;") &&
+		strings.Contains(text, "proxy_set_header Connection \"upgrade\";")
 }
 
 func (m *Manager) siteEnabled(name string) bool {
@@ -235,7 +248,7 @@ func (m *Manager) CreateReverseProxy(ctx context.Context, req ReverseProxyReques
 	if err := m.validateCandidate(ctx, name, content); err != nil {
 		return ApplyResult{}, err
 	}
-	return m.applySite(ctx, name, content, serverName, upstream)
+	return m.applySite(ctx, name, content, serverName, upstream, req.WebSocket)
 }
 
 func validateServerName(value string) (string, error) {
@@ -349,7 +362,7 @@ func nginxQuote(value string) string {
 	return "\"" + strings.ReplaceAll(value, "\"", "\\\"") + "\""
 }
 
-func (m *Manager) applySite(ctx context.Context, name string, content []byte, serverName, upstream string) (ApplyResult, error) {
+func (m *Manager) applySite(ctx context.Context, name string, content []byte, serverName, upstream string, websocket bool) (ApplyResult, error) {
 	target := filepath.Join(m.Layout.AvailableDir, name)
 	enabled := filepath.Join(m.Layout.EnabledDir, name)
 	if err := atomicfile.Write(target, content, 0o644); err != nil {
@@ -389,7 +402,7 @@ func (m *Manager) applySite(ctx context.Context, name string, content []byte, se
 		return ApplyResult{}, fmt.Errorf("nginx reload failed; rolled back: %s", reloadOutput)
 	}
 	return ApplyResult{
-		Site:       Site{ID: name, ServerName: serverName, ProxyPass: upstream, Enabled: true, Managed: true, Path: target},
+		Site:       Site{ID: name, ServerName: serverName, ProxyPass: upstream, Enabled: true, Managed: true, WebSocket: websocket, Path: target},
 		TestOutput: output,
 	}, nil
 }

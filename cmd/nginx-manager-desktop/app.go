@@ -66,6 +66,7 @@ type RemoteSite struct {
 	ProxyPass  string `json:"proxy_pass,omitempty"`
 	Enabled    bool   `json:"enabled"`
 	Managed    bool   `json:"managed"`
+	WebSocket  bool   `json:"websocket"`
 	Path       string `json:"path"`
 }
 
@@ -368,6 +369,15 @@ func (a *App) ListSites(id string) (SiteListResult, error) {
 func (a *App) CreateReverseProxy(id string, req CreateReverseProxyRequest) (CreateReverseProxyResult, error) {
 	var result CreateReverseProxyResult
 	if err := a.requestJSON(id, http.MethodPost, "/api/v1/sites/reverse-proxy", req, &result); err != nil {
+		return CreateReverseProxyResult{}, err
+	}
+	return result, nil
+}
+
+func (a *App) UpdateReverseProxy(id, siteID string, req CreateReverseProxyRequest) (CreateReverseProxyResult, error) {
+	var result CreateReverseProxyResult
+	path := "/api/v1/sites/" + url.PathEscape(siteID) + "/reverse-proxy"
+	if err := a.requestJSON(id, http.MethodPut, path, req, &result); err != nil {
 		return CreateReverseProxyResult{}, err
 	}
 	return result, nil

@@ -32,7 +32,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 	response := ApplyResponse{}
 	switch request.Operation {
 	case OperationProbe:
-		if request.Create != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 {
+		if request.Create != nil || request.Update != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 {
 			return errors.New("invalid probe request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -46,7 +46,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.ConfigOK = ok
 		response.TestOutput = output
 	case OperationCreateReverseProxy:
-		if request.Create == nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 {
+		if request.Create == nil || request.Update != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 {
 			return errors.New("invalid create_reverse_proxy request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -60,8 +60,23 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		}
 		response.OK = true
 		response.Apply = &result
+	case OperationUpdateReverseProxy:
+		if request.Create != nil || request.Update == nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 {
+			return errors.New("invalid update_reverse_proxy request")
+		}
+		manager, err := nginxmgr.New(ctx)
+		if err != nil {
+			return err
+		}
+		result, err := manager.UpdateReverseProxy(ctx, request.SiteID, *request.Update)
+		if err != nil {
+			response.Error = err.Error()
+			break
+		}
+		response.OK = true
+		response.Apply = &result
 	case OperationSetSiteEnabled:
-		if request.Create != nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 {
+		if request.Create != nil || request.Update != nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 {
 			return errors.New("invalid set_site_enabled request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -76,7 +91,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.OK = true
 		response.Site = &site
 	case OperationDeleteSite:
-		if request.Create != nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 {
+		if request.Create != nil || request.Update != nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 {
 			return errors.New("invalid delete_site request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -91,7 +106,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.OK = true
 		response.Site = &site
 	case OperationListSnapshots:
-		if request.Create != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit < 0 || request.Limit > 100 {
+		if request.Create != nil || request.Update != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit < 0 || request.Limit > 100 {
 			return errors.New("invalid list_snapshots request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -106,7 +121,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.OK = true
 		response.Snapshots = snapshots
 	case OperationRestoreSnapshot:
-		if request.Create != nil || request.SiteID != "" || request.SnapshotID == "" || request.Limit != 0 {
+		if request.Create != nil || request.Update != nil || request.SiteID != "" || request.SnapshotID == "" || request.Limit != 0 {
 			return errors.New("invalid restore_snapshot request")
 		}
 		manager, err := nginxmgr.New(ctx)

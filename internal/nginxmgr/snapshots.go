@@ -220,5 +220,6 @@ func parseManagedSite(siteID, actualPath string, enabled bool, content []byte) S
 	if match := proxyPassRE.FindStringSubmatch(text); len(match) == 2 {
 		site.ProxyPass = strings.TrimSpace(match[1])
 	}
+	site.WebSocket = websocketEnabled(text)
 	return site
 }

@@ -91,7 +91,7 @@
         <section class="card">
           <div class="section-title">
             <div>
-              <h2>新建反向代理</h2>
+              <h2 id="proxyFormTitle">新建反向代理</h2>
               <p>先生成候选配置并测试；只有通过 nginx -t 才会落盘并 reload。</p>
             </div>
           </div>
@@ -105,6 +105,7 @@
           </label>
           <div class="actions">
             <button id="createProxyBtn" class="primary">创建并应用</button>
+            <button id="cancelEditProxyBtn" class="hidden">取消编辑</button>
           </div>
           <pre id="siteMessage">创建操作会经过候选测试、全局 nginx -t、原子写入和 reload。</pre>
         </section>

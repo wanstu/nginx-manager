@@ -208,6 +208,28 @@ func Serve(ctx context.Context, listen, version string) error {
 		writeJSON(w, http.StatusCreated, response.Apply)
 	})
 
+	protected("PUT /api/v1/sites/{id}/reverse-proxy", func(w http.ResponseWriter, r *http.Request) {
+		var req nginxmgr.UpdateReverseProxyRequest
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err)
+			return
+		}
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationUpdateReverseProxy,
+			SiteID:    r.PathValue("id"),
+			Update:    &req,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusConflict, err)
+			return
+		}
+		if response.Apply == nil {
+			writeAPIError(w, http.StatusInternalServerError, errors.New("privileged helper returned no apply result"))
+			return
+		}
+		writeJSON(w, http.StatusOK, response.Apply)
+	})
+
 	protected("PUT /api/v1/sites/{id}/enabled", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Enabled bool `json:"enabled"`
