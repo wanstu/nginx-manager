@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Nginx Manager</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand">
+        <div class="logo">N</div>
+        <div><strong>Nginx Manager</strong><span>多服务器控制台</span></div>
+      </div>
+      <button id="newBtn" class="primary">＋ 添加连接</button>
+      <div id="connections" class="connections"></div>
+    </aside>
+
+    <main>
+      <header>
+        <div>
+          <h1 id="pageTitle">连接管理</h1>
+          <p>Desktop 可同时保存多个 nginx-manager CLI Endpoint。</p>
+        </div>
+        <div id="statusBadge" class="badge">未连接</div>
+      </header>
+
+      <section class="card">
+        <div class="grid">
+          <label>名称<input id="name" placeholder="例如：阿里云 Debian"></label>
+          <label>CLI Endpoint<input id="url" placeholder="https://nginx.example.com"></label>
+        </div>
+        <label>管理密码<input id="password" type="password" placeholder="新连接必填；编辑时留空表示保留原密码"></label>
+        <div class="hint">远程地址必须使用 HTTPS；HTTP 仅允许 localhost / 127.0.0.1 等回环地址，方便 SSH Tunnel。</div>
+        <div class="actions">
+          <button id="saveBtn" class="primary">保存连接</button>
+          <button id="testBtn">测试连接</button>
+          <button id="deleteBtn" class="danger">删除</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>CLI 状态</h2>
+        <div class="status-grid">
+          <div><span>主机</span><strong id="hostValue">—</strong></div>
+          <div><span>CLI 版本</span><strong id="versionValue">—</strong></div>
+          <div><span>运行时</span><strong id="runtimeValue">—</strong></div>
+        </div>
+        <pre id="message">选择一个连接后进行测试。</pre>
+      </section>
+
+      <section class="card muted">
+        <h2>下一阶段</h2>
+        <p>站点、反向代理、证书、配置测试、原子发布与回滚都会基于当前选中的 CLI 连接工作，不把 Desktop 绑定到任何一台服务器。</p>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
