@@ -6,11 +6,30 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/wanstu/nginx-manager/internal/nginxmgr"
 )
 
 const maxPrivilegedRequestBytes = 64 << 10
+
+func RunPrivilegedRenewCertificates(ctx context.Context, output io.Writer) error {
+	if err := requireRoot(); err != nil {
+		return err
+	}
+	manager, err := nginxmgr.New(ctx)
+	if err != nil {
+		return err
+	}
+	result, err := manager.RenewCertificates(ctx)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(result) != "" {
+		_, err = fmt.Fprintln(output, result)
+	}
+	return err
+}
 
 func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) error {
 	if err := requireRoot(); err != nil {

@@ -190,3 +190,37 @@ Certbot 只负责写入 Let’s Encrypt 证书；Nginx Manager 自己生成并�
 ```
 
 可以在 Desktop 的 “HTTPS / 证书” 页面查看证书到期时间、申请证书、启用 HTTP → HTTPS 以及手动执行续期检查。
+
+
+### 自动续期 timer
+
+生成 root-only oneshot 服务：
+
+```bash
+/usr/local/bin/nginx-manager service renewal-service \
+  --binary /usr/local/bin/nginx-manager \
+  | sudo tee /etc/systemd/system/nginx-manager-renew.service
+```
+
+生成 timer：
+
+```bash
+/usr/local/bin/nginx-manager service renewal-timer \
+  | sudo tee /etc/systemd/system/nginx-manager-renew.timer
+```
+
+启用：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now nginx-manager-renew.timer
+sudo systemctl list-timers nginx-manager-renew.timer --no-pager
+```
+
+timer 每天在 03:00 和 15:00 两个窗口触发，并加入最多 45 分钟随机延迟。实际执行：
+
+```text
+/usr/local/bin/nginx-manager privileged renew-certificates
+```
+
+该命令要求 root；它**不会**加入 `/etc/sudoers.d/nginx-manager`，因此 Desktop/API 的低权限服务不能绕过结构化 `privileged apply` 协议直接调用它。

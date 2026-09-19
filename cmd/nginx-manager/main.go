@@ -51,6 +51,11 @@ func run(args []string) error {
 			defer cancel()
 			return privilege.RunPrivilegedApply(ctx, os.Stdin, os.Stdout)
 		}
+		if len(args) == 2 && args[1] == "renew-certificates" {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+			defer cancel()
+			return privilege.RunPrivilegedRenewCertificates(ctx, os.Stdout)
+		}
 		if len(args) >= 2 && args[1] == "sudoers" {
 			fs := flag.NewFlagSet("privileged sudoers", flag.ContinueOnError)
 			serviceUser := fs.String("service-user", "nginx-manager", "dedicated API service user")
@@ -65,7 +70,7 @@ func run(args []string) error {
 			fmt.Print(rule)
 			return nil
 		}
-		return errors.New("usage: nginx-manager privileged apply | privileged sudoers [--service-user USER] [--helper PATH]")
+		return errors.New("usage: nginx-manager privileged apply | privileged renew-certificates | privileged sudoers [--service-user USER] [--helper PATH]")
 	case "service":
 		if len(args) >= 2 && args[1] == "systemd" {
 			fs := flag.NewFlagSet("service systemd", flag.ContinueOnError)
@@ -86,7 +91,24 @@ func run(args []string) error {
 			fmt.Print(unit)
 			return nil
 		}
-		return errors.New("usage: nginx-manager service systemd [--service-user USER] [--binary PATH] [--listen 127.0.0.1:8020]")
+		if len(args) >= 2 && args[1] == "renewal-service" {
+			fs := flag.NewFlagSet("service renewal-service", flag.ContinueOnError)
+			binary := fs.String("binary", "/usr/local/bin/nginx-manager", "absolute installed binary path")
+			if err := fs.Parse(args[2:]); err != nil {
+				return err
+			}
+			unit, err := deploy.RenewalServiceUnit(*binary)
+			if err != nil {
+				return err
+			}
+			fmt.Print(unit)
+			return nil
+		}
+		if len(args) == 2 && args[1] == "renewal-timer" {
+			fmt.Print(deploy.RenewalTimerUnit())
+			return nil
+		}
+		return errors.New("usage: nginx-manager service systemd | service renewal-service | service renewal-timer")
 	case "config":
 		if len(args) == 2 && args[1] == "path" {
 			path, err := server.ConfigPath()
@@ -144,8 +166,11 @@ Usage:
   nginx-manager auth set-password
   nginx-manager serve [--listen 127.0.0.1:8020]
   nginx-manager privileged apply
+  nginx-manager privileged renew-certificates
   nginx-manager privileged sudoers [--service-user nginx-manager] [--helper /usr/local/bin/nginx-manager]
   nginx-manager service systemd [--service-user nginx-manager] [--binary /usr/local/bin/nginx-manager] [--listen 127.0.0.1:8020]
+  nginx-manager service renewal-service [--binary /usr/local/bin/nginx-manager]
+  nginx-manager service renewal-timer
   nginx-manager config path
   nginx-manager version
 

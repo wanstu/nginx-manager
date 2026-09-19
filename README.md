@@ -82,6 +82,8 @@ HTTPS 由 Nginx Manager 控制 Nginx 配置，Certbot 只负责签发/续期证�
 
 已启用 HTTPS 的站点编辑上游或 WebSocket 时会保留证书配置；不能直接把域名改成与现有证书不匹配的新域名。
 
+可选的 systemd renewal timer 每天检查两次 Certbot 续期，并加入随机延迟，续期完成后自动执行 `nginx -t` 和 reload。自动续期服务直接由 root systemd oneshot 执行，不加入 Desktop/API 使用的 sudoers 规则。
+
 ## 日志读取
 
 日志读取同样走受限 root helper。Desktop 不发送日志路径，只发送由服务端生成的日志 ID。
@@ -109,6 +111,8 @@ CLI 可以直接生成 sudoers 与 systemd 配置：
 ```bash
 nginx-manager privileged sudoers
 nginx-manager service systemd
+nginx-manager service renewal-service
+nginx-manager service renewal-timer
 ```
 
 完整部署步骤见 `docs/deployment.md`。
@@ -140,4 +144,4 @@ Desktop 当前能：
 - 手动执行 Certbot 续期检查；
 - 安全浏览 Nginx/OpenResty 访问日志与错误日志尾部内容。
 
-下一阶段：自动续期 timer、证书自动维护、运行状态与流量概览。
+下一阶段：运行状态与流量概览、站点级日志筛选、证书维护状态展示。
