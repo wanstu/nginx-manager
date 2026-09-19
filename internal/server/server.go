@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wanstu/nginx-manager/internal/nginxmgr"
+	"github.com/wanstu/nginx-manager/internal/privilege"
 	"github.com/wanstu/wails-desktop-kit/jsonstore"
 	"github.com/wanstu/wails-desktop-kit/paths"
 	"golang.org/x/crypto/bcrypt"
@@ -39,6 +41,15 @@ type NginxStatus struct {
 	Layout   nginxmgr.Layout      `json:"layout"`
 	ConfigOK bool                 `json:"config_ok"`
 	Output   string               `json:"output"`
+}
+
+type PrivilegeStatus struct {
+	Ready      bool                  `json:"ready"`
+	Error      string                `json:"error,omitempty"`
+	Runtime    *nginxmgr.RuntimeInfo `json:"runtime,omitempty"`
+	Layout     *nginxmgr.Layout      `json:"layout,omitempty"`
+	ConfigOK   bool                  `json:"config_ok"`
+	TestOutput string                `json:"test_output,omitempty"`
 }
 
 func configStore() (*jsonstore.Store[Config], error) {
@@ -104,6 +115,9 @@ func HasPassword() (bool, error) {
 }
 
 func Serve(ctx context.Context, listen, version string) error {
+	if err := privilege.RefuseRootServer(); err != nil {
+		return err
+	}
 	store, err := configStore()
 	if err != nil {
 		return err
@@ -143,6 +157,21 @@ func Serve(ctx context.Context, listen, version string) error {
 		writeJSON(w, http.StatusOK, NginxStatus{Runtime: manager.Runtime, Layout: manager.Layout, ConfigOK: ok, Output: output})
 	})
 
+	protected("GET /api/v1/privilege/status", func(w http.ResponseWriter, r *http.Request) {
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{Operation: privilege.OperationProbe})
+		if err != nil {
+			writeJSON(w, http.StatusOK, PrivilegeStatus{Ready: false, Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, PrivilegeStatus{
+			Ready:      true,
+			Runtime:    response.Runtime,
+			Layout:     response.Layout,
+			ConfigOK:   response.ConfigOK,
+			TestOutput: response.TestOutput,
+		})
+	})
+
 	protected("GET /api/v1/sites", func(w http.ResponseWriter, r *http.Request) {
 		manager, err := nginxmgr.New(r.Context())
 		if err != nil {
@@ -158,25 +187,64 @@ func Serve(ctx context.Context, listen, version string) error {
 	})
 
 	protected("POST /api/v1/sites/reverse-proxy", func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
-		decoder := json.NewDecoder(r.Body)
-		decoder.DisallowUnknownFields()
 		var req nginxmgr.ReverseProxyRequest
-		if err := decoder.Decode(&req); err != nil {
-			writeAPIError(w, http.StatusBadRequest, fmt.Errorf("invalid request: %w", err))
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err)
 			return
 		}
-		manager, err := nginxmgr.New(r.Context())
-		if err != nil {
-			writeAPIError(w, http.StatusServiceUnavailable, err)
-			return
-		}
-		result, err := manager.CreateReverseProxy(r.Context(), req)
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationCreateReverseProxy,
+			Create:    &req,
+		})
 		if err != nil {
 			writeAPIError(w, http.StatusConflict, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, result)
+		if response.Apply == nil {
+			writeAPIError(w, http.StatusInternalServerError, errors.New("privileged helper returned no apply result"))
+			return
+		}
+		writeJSON(w, http.StatusCreated, response.Apply)
+	})
+
+	protected("PUT /api/v1/sites/{id}/enabled", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err)
+			return
+		}
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationSetSiteEnabled,
+			SiteID:    r.PathValue("id"),
+			Enabled:   req.Enabled,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusConflict, err)
+			return
+		}
+		if response.Site == nil {
+			writeAPIError(w, http.StatusInternalServerError, errors.New("privileged helper returned no site result"))
+			return
+		}
+		writeJSON(w, http.StatusOK, response.Site)
+	})
+
+	protected("DELETE /api/v1/sites/{id}", func(w http.ResponseWriter, r *http.Request) {
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationDeleteSite,
+			SiteID:    r.PathValue("id"),
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusConflict, err)
+			return
+		}
+		if response.Site == nil {
+			writeAPIError(w, http.StatusInternalServerError, errors.New("privileged helper returned no site result"))
+			return
+		}
+		writeJSON(w, http.StatusOK, response.Site)
 	})
 
 	srv := &http.Server{
@@ -224,6 +292,23 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func decodeJSONRequest(w http.ResponseWriter, r *http.Request, dst any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		return fmt.Errorf("invalid request: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("invalid request: multiple JSON values")
+		}
+		return fmt.Errorf("invalid request: %w", err)
+	}
+	return nil
 }
 
 func writeAPIError(w http.ResponseWriter, status int, err error) {

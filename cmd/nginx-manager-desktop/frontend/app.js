@@ -83,6 +83,7 @@ function resetStatus() {
   $("hostValue").textContent = "—";
   $("versionValue").textContent = "—";
   $("runtimeValue").textContent = "—";
+  $("privilegeValue").textContent = "—";
   $("message").textContent = state.selected ? "可测试当前 CLI 连接。" : "选择或新增一个 CLI 连接。";
 }
 
@@ -151,7 +152,8 @@ $("testBtn").onclick = async () => {
     $("hostValue").textContent = result.hostname || "—";
     $("versionValue").textContent = result.version || "—";
     $("runtimeValue").textContent = result.runtime || "—";
-    $("message").textContent = result.message || "";
+    $("privilegeValue").textContent = result.privilege_ready ? "正常" : "未就绪";
+    $("message").textContent = (result.message || "") + (result.privilege_message ? "\n管理权限：" + result.privilege_message : "");
   } catch (err) {
     $("statusBadge").textContent = "失败";
     $("statusBadge").className = "badge bad";
@@ -221,10 +223,54 @@ function renderSites() {
         '<strong>' + escapeHtml(title) + '</strong>' +
         '<span>' + escapeHtml(proxy) + '</span>' +
       '</div>' +
-      '<div class="site-tags">' +
-        '<span class="mini-badge ' + (site.enabled ? "ok" : "") + '">' + (site.enabled ? "已启用" : "未启用") + '</span>' +
-        '<span class="mini-badge ' + (site.managed ? "managed" : "") + '">' + (site.managed ? "Manager 管理" : "外部配置") + '</span>' +
+      '<div class="site-side">' +
+        '<div class="site-tags">' +
+          '<span class="mini-badge ' + (site.enabled ? "ok" : "") + '">' + (site.enabled ? "已启用" : "未启用") + '</span>' +
+          '<span class="mini-badge ' + (site.managed ? "managed" : "") + '">' + (site.managed ? "Manager 管理" : "外部配置") + '</span>' +
+        '</div>' +
       '</div>';
+
+    if (site.managed) {
+      const actions = document.createElement("div");
+      actions.className = "site-actions";
+
+      const toggle = document.createElement("button");
+      toggle.textContent = site.enabled ? "停用" : "启用";
+      toggle.onclick = async () => {
+        toggle.disabled = true;
+        $("siteMessage").textContent = "正在" + (site.enabled ? "停用" : "启用") + " " + title + "…";
+        try {
+          await api().SetSiteEnabled(state.selected, site.id, !site.enabled);
+          await loadSites();
+        } catch (err) {
+          $("siteMessage").textContent = cleanError(err);
+        } finally {
+          toggle.disabled = false;
+        }
+      };
+
+      const remove = document.createElement("button");
+      remove.className = "danger";
+      remove.textContent = "删除";
+      remove.onclick = async () => {
+        if (!confirm("删除 Manager 管理的站点 “" + title + "”？删除前会保存快照。")) return;
+        remove.disabled = true;
+        $("siteMessage").textContent = "正在删除 " + title + "…";
+        try {
+          await api().DeleteSite(state.selected, site.id);
+          await loadSites();
+        } catch (err) {
+          $("siteMessage").textContent = cleanError(err);
+        } finally {
+          remove.disabled = false;
+        }
+      };
+
+      actions.appendChild(toggle);
+      actions.appendChild(remove);
+      item.querySelector(".site-side").appendChild(actions);
+    }
+
     root.appendChild(item);
   }
 }

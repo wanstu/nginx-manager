@@ -51,11 +51,13 @@ type SaveConnectionRequest struct {
 }
 
 type TestResult struct {
-	OK       bool   `json:"ok"`
-	Message  string `json:"message"`
-	Hostname string `json:"hostname,omitempty"`
-	Runtime  string `json:"runtime,omitempty"`
-	Version  string `json:"version,omitempty"`
+	OK               bool   `json:"ok"`
+	Message          string `json:"message"`
+	Hostname         string `json:"hostname,omitempty"`
+	Runtime          string `json:"runtime,omitempty"`
+	Version          string `json:"version,omitempty"`
+	PrivilegeReady   bool   `json:"privilege_ready"`
+	PrivilegeMessage string `json:"privilege_message,omitempty"`
 }
 
 type RemoteSite struct {
@@ -311,7 +313,33 @@ func (a *App) TestConnection(id string) (TestResult, error) {
 	if payload.Runtime.Version != "" {
 		runtime += " · " + payload.Runtime.Version
 	}
-	return TestResult{OK: true, Message: "连接正常", Hostname: payload.Hostname, Runtime: runtime, Version: payload.Version}, nil
+
+	var privilegeStatus struct {
+		Ready      bool   `json:"ready"`
+		Error      string `json:"error,omitempty"`
+		ConfigOK   bool   `json:"config_ok"`
+		TestOutput string `json:"test_output,omitempty"`
+	}
+	privilegeMessage := ""
+	if err := a.requestJSON(id, http.MethodGet, "/api/v1/privilege/status", nil, &privilegeStatus); err != nil {
+		privilegeMessage = err.Error()
+	} else if !privilegeStatus.Ready {
+		privilegeMessage = privilegeStatus.Error
+	} else if !privilegeStatus.ConfigOK {
+		privilegeMessage = "受限 helper 可用，但 nginx -t 未通过"
+	} else {
+		privilegeMessage = "受限 helper 正常"
+	}
+
+	return TestResult{
+		OK:               true,
+		Message:          "连接正常",
+		Hostname:         payload.Hostname,
+		Runtime:          runtime,
+		Version:          payload.Version,
+		PrivilegeReady:   privilegeStatus.Ready && privilegeStatus.ConfigOK,
+		PrivilegeMessage: privilegeMessage,
+	}, nil
 }
 
 func (a *App) ListSites(id string) (SiteListResult, error) {
@@ -331,6 +359,24 @@ func (a *App) CreateReverseProxy(id string, req CreateReverseProxyRequest) (Crea
 		return CreateReverseProxyResult{}, err
 	}
 	return result, nil
+}
+
+func (a *App) SetSiteEnabled(id, siteID string, enabled bool) (RemoteSite, error) {
+	var site RemoteSite
+	path := "/api/v1/sites/" + url.PathEscape(siteID) + "/enabled"
+	if err := a.requestJSON(id, http.MethodPut, path, map[string]bool{"enabled": enabled}, &site); err != nil {
+		return RemoteSite{}, err
+	}
+	return site, nil
+}
+
+func (a *App) DeleteSite(id, siteID string) (RemoteSite, error) {
+	var site RemoteSite
+	path := "/api/v1/sites/" + url.PathEscape(siteID)
+	if err := a.requestJSON(id, http.MethodDelete, path, nil, &site); err != nil {
+		return RemoteSite{}, err
+	}
+	return site, nil
 }
 
 func (a *App) requestJSON(id, method, path string, input any, output any) error {

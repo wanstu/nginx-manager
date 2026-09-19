@@ -158,6 +158,123 @@ func TestCreateReverseProxyReloadFailureRollsBack(t *testing.T) {
 	}
 }
 
+func TestSetSiteEnabledConfDRoundTrip(t *testing.T) {
+	snapshotDir := t.TempDir()
+	t.Setenv("NGINX_MANAGER_SNAPSHOT_DIR", snapshotDir)
+	runner := &scriptedRunner{results: []runnerResult{
+		{output: "disable test ok"},
+		{output: "disable reload ok"},
+		{output: "enable test ok"},
+		{output: "enable reload ok"},
+	}}
+	manager := newTestManager(t, runner)
+	path := filepath.Join(manager.Layout.AvailableDir, "nginx-manager-toggle.example.com.conf")
+	content := renderReverseProxy("toggle.example.com", "http://127.0.0.1:8002", false)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	disabled, err := manager.SetSiteEnabled(context.Background(), "nginx-manager-toggle.example.com.conf", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.Enabled {
+		t.Fatal("site remained enabled")
+	}
+	if _, err := os.Stat(path + ".disabled"); err != nil {
+		t.Fatalf("disabled site missing: %v", err)
+	}
+	sites, err := manager.ListSites()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sites) != 1 || sites[0].ID != "nginx-manager-toggle.example.com.conf" || sites[0].Enabled {
+		t.Fatalf("disabled ListSites() = %+v", sites)
+	}
+
+	enabled, err := manager.SetSiteEnabled(context.Background(), "nginx-manager-toggle.example.com.conf", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !enabled.Enabled {
+		t.Fatal("site remained disabled")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("enabled site missing: %v", err)
+	}
+
+	entries, err := os.ReadDir(snapshotDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("snapshot count = %d, want 2", len(entries))
+	}
+}
+
+func TestSetSiteEnabledRollbackOnReloadFailure(t *testing.T) {
+	t.Setenv("NGINX_MANAGER_SNAPSHOT_DIR", t.TempDir())
+	runner := &scriptedRunner{results: []runnerResult{
+		{output: "test ok"},
+		{output: "reload failed", err: errors.New("exit 1")},
+		{output: "rollback test ok"},
+		{output: "rollback reload ok"},
+	}}
+	manager := newTestManager(t, runner)
+	path := filepath.Join(manager.Layout.AvailableDir, "nginx-manager-rollback-toggle.example.com.conf")
+	if err := os.WriteFile(path, renderReverseProxy("rollback-toggle.example.com", "http://127.0.0.1:8002", false), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := manager.SetSiteEnabled(context.Background(), "nginx-manager-rollback-toggle.example.com.conf", false)
+	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("enabled file was not restored: %v", err)
+	}
+	if _, err := os.Stat(path + ".disabled"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("disabled file remained after rollback: %v", err)
+	}
+}
+
+func TestDeleteManagedSiteRollbackAndExternalProtection(t *testing.T) {
+	t.Setenv("NGINX_MANAGER_SNAPSHOT_DIR", t.TempDir())
+	runner := &scriptedRunner{results: []runnerResult{
+		{output: "test ok"},
+		{output: "reload failed", err: errors.New("exit 1")},
+		{output: "rollback test ok"},
+		{output: "rollback reload ok"},
+	}}
+	manager := newTestManager(t, runner)
+	managedPath := filepath.Join(manager.Layout.AvailableDir, "nginx-manager-delete.example.com.conf")
+	managedContent := renderReverseProxy("delete.example.com", "http://127.0.0.1:8002", false)
+	if err := os.WriteFile(managedPath, managedContent, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := manager.DeleteSite(context.Background(), "nginx-manager-delete.example.com.conf")
+	if err == nil || !strings.Contains(err.Error(), "rolled back") {
+		t.Fatalf("delete error = %v", err)
+	}
+	restored, err := os.ReadFile(managedPath)
+	if err != nil {
+		t.Fatalf("managed site not restored: %v", err)
+	}
+	if string(restored) != string(managedContent) {
+		t.Fatal("managed site content changed after rollback")
+	}
+
+	externalPath := filepath.Join(manager.Layout.AvailableDir, "nginx-manager-external.example.com.conf")
+	if err := os.WriteFile(externalPath, []byte("server { server_name external.example.com; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.DeleteSite(context.Background(), "nginx-manager-external.example.com.conf"); err == nil ||
+		!strings.Contains(err.Error(), "external") {
+		t.Fatalf("external delete error = %v", err)
+	}
+}
+
 func TestValidationRejectsUnsafeInput(t *testing.T) {
 	manager := newTestManager(t, &scriptedRunner{})
 	cases := []ReverseProxyRequest{

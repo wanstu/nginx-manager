@@ -8,6 +8,7 @@
 - `nginx-manager-desktop`：桌面控制台，可同时保存多个 CLI Endpoint。
 - Desktop 普通连接信息使用 Kit `jsonstore`；管理密码使用 Kit `secureconfig`，不会明文进入 settings.json。
 - CLI 只保存 bcrypt 密码哈希；未配置密码时拒绝启动管理 API。
+- Linux 上 HTTP API 拒绝以 root 身份运行；写配置通过固定的 `privileged apply` 入口最小提权。
 - 远程 Endpoint 必须使用 HTTPS；HTTP 仅允许 localhost / loopback，适合 SSH Tunnel。
 
 ## CLI
@@ -31,9 +32,12 @@ nginx-manager serve --listen 127.0.0.1:8020
 ```text
 GET  /healthz
 GET  /api/v1/info                 Basic Auth
-GET  /api/v1/nginx/status         Basic Auth
-GET  /api/v1/sites                Basic Auth
-POST /api/v1/sites/reverse-proxy  Basic Auth
+GET    /api/v1/nginx/status              Basic Auth
+GET    /api/v1/privilege/status          Basic Auth
+GET    /api/v1/sites                     Basic Auth
+POST   /api/v1/sites/reverse-proxy       Basic Auth
+PUT    /api/v1/sites/{id}/enabled        Basic Auth
+DELETE /api/v1/sites/{id}                Basic Auth
 ```
 
 Basic Auth 用户名固定为 `admin`，密码为 CLI 初始化时设置的管理密码。
@@ -50,7 +54,28 @@ Basic Auth 用户名固定为 `admin`，密码为 CLI 初始化时设置的管�
 6. 完整测试通过后执行 reload；
 7. 全局测试或 reload 失败时删除本次新增配置并恢复旧运行配置。
 
-Manager 创建的站点带 `# managed-by: nginx-manager` 标记。现有外部配置可以读取，但不会被新建操作覆盖。
+Manager 创建的站点带 `# managed-by: nginx-manager` 标记。现有外部配置可以读取，但不会被新建、启停或删除操作覆盖。
+
+Manager 站点在停用或删除前会自动保存 root-only 快照；`sites-enabled` 与 `conf.d` 两种常见布局都支持安全启停。
+
+## Linux 权限模型
+
+`nginx-manager serve` 应以专用低权限用户运行。需要修改配置时，它只能执行 sudoers 明确放行的固定命令：
+
+```text
+/usr/local/bin/nginx-manager privileged apply
+```
+
+请求通过 stdin 使用结构化 JSON 协议传递，helper 只接受预定义操作，不提供 shell、命令路径或任意文件路径参数。
+
+CLI 可以直接生成 sudoers 与 systemd 配置：
+
+```bash
+nginx-manager privileged sudoers
+nginx-manager service systemd
+```
+
+完整部署步骤见 `docs/deployment.md`。
 
 ## Desktop
 
@@ -66,7 +91,9 @@ Desktop 当前能：
 - 安全保存每个连接的密码；
 - 测试 CLI 认证与连通性；
 - 展示服务器 Hostname、CLI 版本、Nginx/OpenResty Runtime；
+- 独立检查受限 root helper / `nginx -t` 是否就绪；
 - 读取当前服务器站点并区分 Manager 管理 / 外部配置；
-- 创建反向代理，并展示事务执行结果。
+- 创建反向代理，并展示事务执行结果；
+- 启用、停用、删除 Manager 管理的站点。
 
-下一阶段：编辑/停用 Manager 站点、配置快照历史、证书 / ACME、访问日志与错误日志。
+下一阶段：编辑 Manager 站点、快照历史与恢复、证书 / ACME、访问日志与错误日志。

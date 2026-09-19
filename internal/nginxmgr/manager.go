@@ -164,7 +164,9 @@ func (m *Manager) ListSites() ([]Site, error) {
 		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		if m.Layout.Mode == "conf.d" && !strings.HasSuffix(entry.Name(), ".conf") {
+		if m.Layout.Mode == "conf.d" &&
+			!strings.HasSuffix(entry.Name(), ".conf") &&
+			!strings.HasSuffix(entry.Name(), ".conf.disabled") {
 			continue
 		}
 		path := filepath.Join(m.Layout.AvailableDir, entry.Name())
@@ -173,7 +175,11 @@ func (m *Manager) ListSites() ([]Site, error) {
 			continue
 		}
 		text := string(data)
-		site := Site{ID: entry.Name(), Path: path, Managed: strings.Contains(text, managedMarker), Enabled: m.siteEnabled(entry.Name())}
+		canonicalID := entry.Name()
+		if m.Layout.Mode == "conf.d" && strings.HasSuffix(canonicalID, ".disabled") {
+			canonicalID = strings.TrimSuffix(canonicalID, ".disabled")
+		}
+		site := Site{ID: canonicalID, Path: path, Managed: strings.Contains(text, managedMarker), Enabled: m.siteEnabled(entry.Name())}
 		if match := serverNameRE.FindStringSubmatch(text); len(match) == 2 {
 			fields := strings.Fields(match[1])
 			if len(fields) > 0 {
@@ -200,7 +206,7 @@ func (m *Manager) ListSites() ([]Site, error) {
 
 func (m *Manager) siteEnabled(name string) bool {
 	if m.Layout.Mode == "conf.d" {
-		return true
+		return !strings.HasSuffix(name, ".disabled")
 	}
 	_, err := os.Lstat(filepath.Join(m.Layout.EnabledDir, name))
 	return err == nil

@@ -11,7 +11,10 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/wanstu/nginx-manager/internal/deploy"
+	"github.com/wanstu/nginx-manager/internal/privilege"
 	"github.com/wanstu/nginx-manager/internal/server"
 	"golang.org/x/term"
 )
@@ -42,6 +45,48 @@ func run(args []string) error {
 		return server.Serve(ctx, *listen, version)
 	case "auth":
 		return runAuth(args[1:])
+	case "privileged":
+		if len(args) == 2 && args[1] == "apply" {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return privilege.RunPrivilegedApply(ctx, os.Stdin, os.Stdout)
+		}
+		if len(args) >= 2 && args[1] == "sudoers" {
+			fs := flag.NewFlagSet("privileged sudoers", flag.ContinueOnError)
+			serviceUser := fs.String("service-user", "nginx-manager", "dedicated API service user")
+			helper := fs.String("helper", "/usr/local/bin/nginx-manager", "absolute installed helper path")
+			if err := fs.Parse(args[2:]); err != nil {
+				return err
+			}
+			rule, err := privilege.SudoersRule(*serviceUser, *helper)
+			if err != nil {
+				return err
+			}
+			fmt.Print(rule)
+			return nil
+		}
+		return errors.New("usage: nginx-manager privileged apply | privileged sudoers [--service-user USER] [--helper PATH]")
+	case "service":
+		if len(args) >= 2 && args[1] == "systemd" {
+			fs := flag.NewFlagSet("service systemd", flag.ContinueOnError)
+			serviceUser := fs.String("service-user", "nginx-manager", "dedicated API service user")
+			binary := fs.String("binary", "/usr/local/bin/nginx-manager", "absolute installed binary path")
+			listen := fs.String("listen", "127.0.0.1:8020", "loopback HTTP listen address")
+			if err := fs.Parse(args[2:]); err != nil {
+				return err
+			}
+			unit, err := deploy.SystemdUnit(deploy.SystemdOptions{
+				ServiceUser: *serviceUser,
+				BinaryPath:  *binary,
+				Listen:      *listen,
+			})
+			if err != nil {
+				return err
+			}
+			fmt.Print(unit)
+			return nil
+		}
+		return errors.New("usage: nginx-manager service systemd [--service-user USER] [--binary PATH] [--listen 127.0.0.1:8020]")
 	case "config":
 		if len(args) == 2 && args[1] == "path" {
 			path, err := server.ConfigPath()
@@ -98,6 +143,9 @@ func printUsage() {
 Usage:
   nginx-manager auth set-password
   nginx-manager serve [--listen 127.0.0.1:8020]
+  nginx-manager privileged apply
+  nginx-manager privileged sudoers [--service-user nginx-manager] [--helper /usr/local/bin/nginx-manager]
+  nginx-manager service systemd [--service-user nginx-manager] [--binary /usr/local/bin/nginx-manager] [--listen 127.0.0.1:8020]
   nginx-manager config path
   nginx-manager version
 

@@ -126,7 +126,7 @@ input {
 .badge.ok { color:#087443; background:rgba(21,153,87,.12); }
 .badge.bad { color:#b42318; background:rgba(180,35,24,.10); }
 
-.status-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+.status-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
 .status-grid > div {
   border:1px solid rgba(127,127,127,.15);
   border-radius:12px; padding:14px; display:grid; gap:6px;
@@ -152,7 +152,15 @@ pre {
 .site-main span {
   font-size:12px; opacity:.56; overflow:hidden; text-overflow:ellipsis;
 }
+.site-side {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-shrink:0;
+}
 .site-tags { display:flex; gap:6px; flex-shrink:0; }
+.site-actions { display:flex; gap:6px; }
+.site-actions button { padding:6px 9px; font-size:11px; }
 .mini-badge {
   padding:5px 8px; border-radius:999px;
   background:rgba(127,127,127,.10); font-size:11px;
