@@ -215,8 +215,16 @@ type RemotePathsConfig struct {
 	SiteLogDir        string `json:"site_log_dir,omitempty"`
 }
 
+type RemoteProcessIdentity struct {
+	Username   string `json:"username,omitempty"`
+	UID        string `json:"uid,omitempty"`
+	HomeDir    string `json:"home_dir,omitempty"`
+	ConfigPath string `json:"config_path,omitempty"`
+}
+
 type DiagnosticsResult struct {
 	Executable      string                   `json:"executable,omitempty"`
+	Process         RemoteProcessIdentity    `json:"process"`
 	Runtime         RemoteRuntimeInfo        `json:"runtime"`
 	Layout          RemoteLayout             `json:"layout"`
 	Services        RemoteServiceDiagnostics `json:"services"`
@@ -225,6 +233,25 @@ type DiagnosticsResult struct {
 	PathsConfigPath string                   `json:"paths_config_path"`
 	PathsConfigured bool                     `json:"paths_configured"`
 	PathsConfig     RemotePathsConfig        `json:"paths_config"`
+}
+
+type DeploymentPlanStep struct {
+	ID       string   `json:"id"`
+	Title    string   `json:"title"`
+	Required bool     `json:"required"`
+	Complete bool     `json:"complete"`
+	Detail   string   `json:"detail,omitempty"`
+	Commands []string `json:"commands"`
+}
+
+type DeploymentPlan struct {
+	Ready         bool                 `json:"ready"`
+	Completed     int                  `json:"completed"`
+	Total         int                  `json:"total"`
+	RequiredReady int                  `json:"required_ready"`
+	RequiredTotal int                  `json:"required_total"`
+	Steps         []DeploymentPlanStep `json:"steps"`
+	VerifyCommand string               `json:"verify_command"`
 }
 
 type CertificateListResult struct {
@@ -1136,6 +1163,17 @@ func (a *App) LoadDiagnostics(id string) (DiagnosticsResult, error) {
 	var result DiagnosticsResult
 	if err := a.requestJSON(id, http.MethodGet, "/api/v1/diagnostics", nil, &result); err != nil {
 		return DiagnosticsResult{}, err
+	}
+	return result, nil
+}
+
+func (a *App) LoadDeploymentPlan(id string) (DeploymentPlan, error) {
+	var result DeploymentPlan
+	if err := a.requestJSON(id, http.MethodGet, "/api/v1/deployment/plan", nil, &result); err != nil {
+		return DeploymentPlan{}, err
+	}
+	if result.Steps == nil {
+		result.Steps = []DeploymentPlanStep{}
 	}
 	return result, nil
 }
