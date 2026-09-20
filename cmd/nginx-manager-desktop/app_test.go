@@ -148,6 +148,65 @@ func TestApplySiteTrafficSummaries(t *testing.T) {
 	}
 }
 
+func TestApplyFleetCertificateHealth(t *testing.T) {
+	now, err := time.Parse(time.RFC3339, "2026-09-20T12:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := FleetServerOverview{Warnings: []string{}}
+	sites := []RemoteSite{
+		{ServerName: "ok.example.com", HTTPS: true},
+		{ServerName: "missing.example.com", HTTPS: true},
+		{ServerName: "http.example.com", HTTPS: false},
+	}
+	certificates := CertificateListResult{
+		Certificates: []RemoteCertificate{
+			{Name: "ok.example.com", NotAfter: "2026-12-01T00:00:00Z"},
+			{Name: "expired.example.com", NotAfter: "2026-09-19T00:00:00Z"},
+			{Name: "soon.example.com", NotAfter: "2026-10-01T00:00:00Z"},
+		},
+		Certbot:      RemoteCertbotStatus{Available: true},
+		RenewalTimer: RemoteRenewalTimerStatus{Enabled: true, Active: true},
+	}
+	applyFleetCertificateHealth(&result, sites, certificates, now)
+	if result.Certificates != 3 ||
+		result.CertificatesExpired != 1 ||
+		result.CertificatesExpiring != 1 ||
+		result.HTTPSWithoutCertificate != 1 {
+		t.Fatalf("fleet certificate health = %+v", result)
+	}
+	if len(result.Warnings) != 3 {
+		t.Fatalf("warnings = %v", result.Warnings)
+	}
+}
+
+func TestAggregateFleetServers(t *testing.T) {
+	result := aggregateFleetServers([]FleetServerOverview{
+		{Status: "healthy", TotalSites: 3, HTTPSSites: 2},
+		{Status: "attention", TotalSites: 5, HTTPSSites: 1, CertificatesExpiring: 2, HTTPSWithoutCertificate: 1},
+		{Status: "unreachable", CertificatesExpired: 1},
+	})
+	if result.Total != 3 || result.Healthy != 1 || result.Attention != 1 || result.Unreachable != 1 {
+		t.Fatalf("fleet totals = %+v", result)
+	}
+	if result.TotalSites != 8 || result.HTTPSSites != 3 || result.CertificatesExpired != 1 ||
+		result.CertificatesExpiring != 2 || result.HTTPSWithoutCertificate != 1 {
+		t.Fatalf("fleet aggregate = %+v", result)
+	}
+}
+
+func TestFleetCapabilitySupported(t *testing.T) {
+	if !fleetCapabilitySupported(TestResult{CapabilitiesKnown: false}, "sites_read") {
+		t.Fatal("legacy CLI should use compatibility mode")
+	}
+	if fleetCapabilitySupported(TestResult{CapabilitiesKnown: true, APICompatible: false, Capabilities: []string{"sites_read"}}, "sites_read") {
+		t.Fatal("newer incompatible API should not be queried")
+	}
+	if !fleetCapabilitySupported(TestResult{CapabilitiesKnown: true, APICompatible: true, Capabilities: []string{"sites_read"}}, "sites_read") {
+		t.Fatal("declared capability should be supported")
+	}
+}
+
 func TestCertificateCoversHost(t *testing.T) {
 	certificate := RemoteCertificate{
 		Name:    "example.com",
