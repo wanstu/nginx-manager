@@ -15,6 +15,9 @@ const (
 	OperationRenewCertificates  = "renew_certificates"
 	OperationListLogs           = "list_logs"
 	OperationTailLog            = "tail_log"
+	OperationTailLogs           = "tail_logs"
+	OperationSafeReload         = "safe_reload"
+	OperationUpdateSiteTLS      = "update_site_tls"
 )
 
 type ApplyRequest struct {
@@ -22,11 +25,13 @@ type ApplyRequest struct {
 	Create     *nginxmgr.ReverseProxyRequest
 	Update     *nginxmgr.UpdateReverseProxyRequest
 	Issue      *nginxmgr.IssueCertificateRequest
+	TLS        *nginxmgr.UpdateTLSRequest
 	SiteID     string
 	Enabled    bool
 	SnapshotID string
 	Limit      int
 	LogID      string
+	LogIDs     []string
 	Lines      int
 }
 
@@ -46,4 +51,6 @@ type ApplyResponse struct {
 	Output       string
 	Logs         []nginxmgr.LogFile
 	LogTail      *nginxmgr.LogTail
+	LogTails     []nginxmgr.LogTailResult
+	Reload       *nginxmgr.ReloadResult
 }

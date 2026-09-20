@@ -33,6 +33,7 @@ func (r *scriptedRunner) Run(_ context.Context, path string, args ...string) (st
 func newTestManager(t *testing.T, runner Runner) *Manager {
 	t.Helper()
 	root := t.TempDir()
+	t.Setenv("NGINX_MANAGER_SITE_LOG_DIR", filepath.Join(root, "logs"))
 	confD := filepath.Join(root, "conf.d")
 	if err := os.MkdirAll(confD, 0o755); err != nil {
 		t.Fatal(err)
@@ -90,6 +91,45 @@ func TestCreateReverseProxySuccess(t *testing.T) {
 	}
 	if len(sites) != 1 || sites[0].ServerName != "me.example.com" || !sites[0].Managed {
 		t.Fatalf("ListSites() = %+v", sites)
+	}
+}
+
+func TestCreateReverseProxyAdvancedOptions(t *testing.T) {
+	runner := &scriptedRunner{results: []runnerResult{
+		{output: "candidate ok"},
+		{output: "live ok"},
+		{output: "reload ok"},
+	}}
+	manager := newTestManager(t, runner)
+
+	result, err := manager.CreateReverseProxy(context.Background(), ReverseProxyRequest{
+		ServerName:            "advanced.example.com",
+		Upstream:              "http://127.0.0.1:8002",
+		WebSocket:             true,
+		MaxBodySizeMB:         256,
+		ConnectTimeoutSeconds: 15,
+		ReadTimeoutSeconds:    180,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Site.MaxBodySizeMB != 256 ||
+		result.Site.ConnectTimeoutSeconds != 15 ||
+		result.Site.ReadTimeoutSeconds != 180 {
+		t.Fatalf("advanced options not parsed: %+v", result.Site)
+	}
+	data, err := os.ReadFile(result.Site.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{
+		"client_max_body_size 256m;",
+		"proxy_connect_timeout 15s;",
+		"proxy_read_timeout 180s;",
+	} {
+		if !strings.Contains(string(data), expected) {
+			t.Fatalf("advanced config missing %q:\n%s", expected, data)
+		}
 	}
 }
 
@@ -484,6 +524,9 @@ func TestValidationRejectsUnsafeInput(t *testing.T) {
 		{ServerName: "ok.example.com", Upstream: "file:///etc/passwd"},
 		{ServerName: "ok.example.com", Upstream: "http://127.0.0.1:8002; include /tmp/x"},
 		{ServerName: "ok.example.com", Upstream: "http://$backend:8000"},
+		{ServerName: "ok.example.com", Upstream: "http://127.0.0.1:8002", MaxBodySizeMB: 10241},
+		{ServerName: "ok.example.com", Upstream: "http://127.0.0.1:8002", ConnectTimeoutSeconds: 301},
+		{ServerName: "ok.example.com", Upstream: "http://127.0.0.1:8002", ReadTimeoutSeconds: 86401},
 	}
 	for _, req := range cases {
 		if _, err := manager.CreateReverseProxy(context.Background(), req); err == nil {

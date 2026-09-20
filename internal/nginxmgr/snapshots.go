@@ -8,11 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/wanstu/wails-desktop-kit/atomicfile"
 )
+
+const defaultSnapshotRetention = 200
 
 type SnapshotMeta struct {
 	ID        string    `json:"id"`
@@ -20,6 +23,65 @@ type SnapshotMeta struct {
 	Operation string    `json:"operation"`
 	SiteID    string    `json:"site_id"`
 	Enabled   bool      `json:"enabled"`
+}
+
+func snapshotRetention() int {
+	if configured := configuredPathsOrZero().SnapshotRetention; configured > 0 {
+		return configured
+	}
+	raw := strings.TrimSpace(os.Getenv("NGINX_MANAGER_SNAPSHOT_RETENTION"))
+	if raw == "" {
+		return defaultSnapshotRetention
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 || value > 10000 {
+		return defaultSnapshotRetention
+	}
+	return value
+}
+
+func pruneSnapshotFiles(root string, retention int) error {
+	if retention < 1 {
+		return nil
+	}
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read snapshot directory for pruning: %w", err)
+	}
+
+	type snapshotFile struct {
+		name    string
+		modTime time.Time
+	}
+	files := make([]snapshotFile, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, snapshotFile{name: entry.Name(), modTime: info.ModTime()})
+	}
+	if len(files) <= retention {
+		return nil
+	}
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].modTime.Equal(files[j].modTime) {
+			return files[i].name > files[j].name
+		}
+		return files[i].modTime.After(files[j].modTime)
+	})
+	for _, file := range files[retention:] {
+		if err := os.Remove(filepath.Join(root, file.name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("prune snapshot %s: %w", file.name, err)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) ListSnapshots(limit int) ([]SnapshotMeta, error) {
@@ -221,6 +283,8 @@ func parseManagedSite(siteID, actualPath string, enabled bool, content []byte) S
 		site.ProxyPass = strings.TrimSpace(match[1])
 	}
 	site.WebSocket = websocketEnabled(text)
+	applyProxyOptionFields(&site, text)
+	applySiteLogFields(&site, text)
 	applyTLSFields(&site, text)
 	return site
 }

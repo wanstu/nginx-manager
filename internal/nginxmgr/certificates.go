@@ -39,6 +39,11 @@ type IssueCertificateRequest struct {
 	RedirectHTTPS bool   `json:"redirect_https"`
 }
 
+type UpdateTLSRequest struct {
+	Enabled       bool `json:"enabled"`
+	RedirectHTTPS bool `json:"redirect_https"`
+}
+
 type Certificate struct {
 	Name      string    `json:"name"`
 	Domains   []string  `json:"domains"`
@@ -104,6 +109,7 @@ func (m *Manager) IssueCertificate(ctx context.Context, siteID string, req Issue
 		current.Site.WebSocket,
 		existingTLS,
 		webroot,
+		proxyOptionsFromSite(current.Site),
 	)
 	if err := m.validateCandidate(ctx, siteID, challengeContent); err != nil {
 		return Site{}, err
@@ -148,6 +154,7 @@ func (m *Manager) IssueCertificate(ctx context.Context, siteID string, req Issue
 		current.Site.WebSocket,
 		tls,
 		webroot,
+		proxyOptionsFromSite(current.Site),
 	)
 	if err := m.validateCandidate(ctx, siteID, finalContent); err != nil {
 		restoreOriginal()
@@ -164,6 +171,78 @@ func (m *Manager) IssueCertificate(ctx context.Context, siteID string, req Issue
 		return Site{}, err
 	}
 	return parseManagedSite(siteID, current.ActualPath, true, finalContent), nil
+}
+
+func (m *Manager) UpdateSiteTLS(ctx context.Context, siteID string, req UpdateTLSRequest) (Site, error) {
+	mutationMu.Lock()
+	defer mutationMu.Unlock()
+
+	current, err := m.loadManagedSite(siteID)
+	if err != nil {
+		return Site{}, err
+	}
+	if current.Site.ProxyPass == "" {
+		return Site{}, errors.New("managed site is not a reverse proxy")
+	}
+
+	if !req.Enabled {
+		if !current.Site.HTTPS {
+			return current.Site, nil
+		}
+		content := renderReverseProxyManaged(
+			current.Site.ServerName,
+			current.Site.ProxyPass,
+			current.Site.WebSocket,
+			nil,
+			acmeWebroot(),
+			proxyOptionsFromSite(current.Site),
+		)
+		if err := m.validateCandidate(ctx, siteID, content); err != nil {
+			return Site{}, err
+		}
+		if err := m.snapshotSite("disable_https", current); err != nil {
+			return Site{}, err
+		}
+		if err := m.replaceManagedSiteContent(ctx, current, content); err != nil {
+			return Site{}, err
+		}
+		return parseManagedSite(siteID, current.ActualPath, current.Site.Enabled, content), nil
+	}
+
+	if current.Site.HTTPS && current.Site.RedirectHTTPS == req.RedirectHTTPS {
+		return current.Site, nil
+	}
+
+	certificateName := strings.TrimSpace(current.Site.Certificate)
+	if certificateName == "" || strings.Contains(certificateName, "/") {
+		certificateName = current.Site.ServerName
+	}
+	tls := tlsConfigForSite(certificateName, req.RedirectHTTPS)
+	if err := validateCertificateFiles(tls, current.Site.ServerName); err != nil {
+		return Site{}, err
+	}
+	content := renderReverseProxyManaged(
+		current.Site.ServerName,
+		current.Site.ProxyPass,
+		current.Site.WebSocket,
+		tls,
+		acmeWebroot(),
+		proxyOptionsFromSite(current.Site),
+	)
+	if err := m.validateCandidate(ctx, siteID, content); err != nil {
+		return Site{}, err
+	}
+	operation := "tls_settings"
+	if !current.Site.HTTPS {
+		operation = "enable_existing_https"
+	}
+	if err := m.snapshotSite(operation, current); err != nil {
+		return Site{}, err
+	}
+	if err := m.replaceManagedSiteContent(ctx, current, content); err != nil {
+		return Site{}, err
+	}
+	return parseManagedSite(siteID, current.ActualPath, current.Site.Enabled, content), nil
 }
 
 func (m *Manager) RenewCertificates(ctx context.Context) (string, error) {
@@ -190,6 +269,9 @@ func (m *Manager) RenewCertificates(ctx context.Context) (string, error) {
 }
 
 func ListCertificates() ([]Certificate, error) {
+	if _, _, err := LoadPathsConfig(); err != nil {
+		return nil, err
+	}
 	root := letsEncryptLiveRoot()
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -281,15 +363,21 @@ func readCertificate(path string) (*x509.Certificate, error) {
 }
 
 func acmeWebroot() string {
+	if value := strings.TrimSpace(configuredPathsOrZero().ACMEWebroot); value != "" {
+		return filepath.Clean(value)
+	}
 	if value := strings.TrimSpace(os.Getenv("NGINX_MANAGER_ACME_WEBROOT")); value != "" {
-		return value
+		return filepath.Clean(value)
 	}
 	return acmeWebrootDefault
 }
 
 func letsEncryptLiveRoot() string {
+	if value := strings.TrimSpace(configuredPathsOrZero().CertLiveDir); value != "" {
+		return filepath.Clean(value)
+	}
 	if value := strings.TrimSpace(os.Getenv("NGINX_MANAGER_CERT_LIVE_DIR")); value != "" {
-		return value
+		return filepath.Clean(value)
 	}
 	return letsEncryptLiveDefault
 }

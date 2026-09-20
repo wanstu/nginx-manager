@@ -53,6 +53,22 @@ func (m *Manager) UpdateReverseProxy(ctx context.Context, siteID string, req Upd
 	if err != nil {
 		return ApplyResult{}, err
 	}
+	options, err := validateProxyOptions(ProxyOptions{
+		MaxBodySizeMB:         req.MaxBodySizeMB,
+		ConnectTimeoutSeconds: req.ConnectTimeoutSeconds,
+		ReadTimeoutSeconds:    req.ReadTimeoutSeconds,
+	})
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if err := ensureManagedSiteLogDir(); err != nil {
+		return ApplyResult{}, err
+	}
+	options, err = withManagedSiteLogs(options, serverName)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+
 	newID := siteFileName(serverName, m.Layout.Mode)
 	if newID != siteID {
 		if err := m.ensureManagedSiteIDAvailable(newID); err != nil {
@@ -67,7 +83,7 @@ func (m *Manager) UpdateReverseProxy(ctx context.Context, siteID string, req Upd
 		}
 		tls = tlsConfigForSite(current.Site.ServerName, current.Site.RedirectHTTPS)
 	}
-	content := renderReverseProxyManaged(serverName, upstream, req.WebSocket, tls, acmeWebroot())
+	content := renderReverseProxyManaged(serverName, upstream, req.WebSocket, tls, acmeWebroot(), options)
 	if err := m.validateCandidate(ctx, newID, content); err != nil {
 		return ApplyResult{}, err
 	}
@@ -218,7 +234,7 @@ func (m *Manager) loadManagedSite(siteID string) (managedSiteState, error) {
 	var actual string
 	var data []byte
 	for _, candidate := range candidates {
-		value, err := os.ReadFile(candidate)
+		value, err := m.readSiteConfigFile(candidate)
 		if err == nil {
 			actual = candidate
 			data = value
@@ -260,6 +276,8 @@ func (m *Manager) loadManagedSite(siteID string) (managedSiteState, error) {
 		site.ProxyPass = strings.TrimSpace(match[1])
 	}
 	site.WebSocket = websocketEnabled(text)
+	applyProxyOptionFields(&site, text)
+	applySiteLogFields(&site, text)
 	applyTLSFields(&site, text)
 
 	return managedSiteState{Site: site, Content: data, ActualPath: actual}, nil
@@ -333,11 +351,14 @@ func (m *Manager) testAndReload(ctx context.Context, rollback func()) error {
 }
 
 func snapshotRoot() string {
+	if configured := strings.TrimSpace(configuredPathsOrZero().SnapshotDir); configured != "" {
+		return filepath.Clean(configured)
+	}
 	root := strings.TrimSpace(os.Getenv("NGINX_MANAGER_SNAPSHOT_DIR"))
 	if root == "" {
 		root = "/var/lib/nginx-manager/snapshots"
 	}
-	return root
+	return filepath.Clean(root)
 }
 
 func (m *Manager) snapshotSite(operation string, state managedSiteState) error {
@@ -364,5 +385,6 @@ func (m *Manager) snapshotSite(operation string, state managedSiteState) error {
 	if err := atomicfile.Write(path, data, 0o600); err != nil {
 		return fmt.Errorf("write site snapshot: %w", err)
 	}
+	_ = pruneSnapshotFiles(root, snapshotRetention())
 	return nil
 }

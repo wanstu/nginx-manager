@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	MaxLogLines = 1000
-	MaxLogBytes = 512 << 10
+	MaxLogLines      = 1000
+	MaxLogBytes      = 512 << 10
+	MaxBatchLogFiles = 8
 )
 
-var logDirectiveRE = regexp.MustCompile(`(?m)^\s*(access_log|error_log)\s+([^;\s]+)`)
+var logDirectiveRE = regexp.MustCompile(`(?m)^\s*(access_log|error_log)\s+("[^"]+"|'[^']+'|[^;\s]+)`)
 
 type LogFile struct {
 	ID   string `json:"id"`
@@ -32,6 +33,12 @@ type LogTail struct {
 	Lines     int     `json:"lines"`
 	Truncated bool    `json:"truncated"`
 	Content   string  `json:"content"`
+}
+
+type LogTailResult struct {
+	File  LogFile  `json:"file"`
+	Tail  *LogTail `json:"tail,omitempty"`
+	Error string   `json:"error,omitempty"`
 }
 
 func (m *Manager) ListLogs(ctx context.Context) ([]LogFile, error) {
@@ -109,6 +116,9 @@ func allowedLogRoots(prefix string) []string {
 	if prefix != "" {
 		candidates = append(candidates, filepath.Join(prefix, "logs"))
 	}
+	if managedRoot, err := managedSiteLogRoot(); err == nil {
+		candidates = append(candidates, managedRoot)
+	}
 	roots := make([]string, 0, len(candidates))
 	for _, candidate := range candidates {
 		if candidate == "" || !filepath.IsAbs(candidate) {
@@ -173,32 +183,76 @@ func logFileID(kind, path string) string {
 }
 
 func (m *Manager) TailLog(ctx context.Context, logID string, lines int) (LogTail, error) {
+	results, err := m.TailLogs(ctx, []string{logID}, lines)
+	if err != nil {
+		return LogTail{}, err
+	}
+	if len(results) != 1 {
+		return LogTail{}, errors.New("log tail result is missing")
+	}
+	if results[0].Error != "" {
+		return LogTail{}, errors.New(results[0].Error)
+	}
+	if results[0].Tail == nil {
+		return LogTail{}, errors.New("log tail result is missing")
+	}
+	return *results[0].Tail, nil
+}
+
+func (m *Manager) TailLogs(ctx context.Context, logIDs []string, lines int) ([]LogTailResult, error) {
+	if len(logIDs) == 0 {
+		return nil, errors.New("at least one log id is required")
+	}
+	if len(logIDs) > MaxBatchLogFiles {
+		return nil, fmt.Errorf("at most %d log files can be read at once", MaxBatchLogFiles)
+	}
 	if lines <= 0 {
 		lines = 200
 	}
 	if lines > MaxLogLines {
-		return LogTail{}, fmt.Errorf("lines must be at most %d", MaxLogLines)
-	}
-	logs, err := m.ListLogs(ctx)
-	if err != nil {
-		return LogTail{}, err
-	}
-	var selected *LogFile
-	for i := range logs {
-		if logs[i].ID == logID {
-			selected = &logs[i]
-			break
-		}
-	}
-	if selected == nil {
-		return LogTail{}, errors.New("log file is not in the current nginx configuration")
+		return nil, fmt.Errorf("lines must be at most %d", MaxLogLines)
 	}
 
-	content, actualLines, truncated, err := tailTextFile(selected.Path, lines, MaxLogBytes)
-	if err != nil {
-		return LogTail{}, fmt.Errorf("read nginx log: %w", err)
+	seenIDs := map[string]bool{}
+	for _, logID := range logIDs {
+		if strings.TrimSpace(logID) == "" {
+			return nil, errors.New("log id is required")
+		}
+		if seenIDs[logID] {
+			return nil, errors.New("duplicate log id")
+		}
+		seenIDs[logID] = true
 	}
-	return LogTail{File: *selected, Lines: actualLines, Truncated: truncated, Content: content}, nil
+
+	logs, err := m.ListLogs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]LogFile, len(logs))
+	for _, logFile := range logs {
+		byID[logFile.ID] = logFile
+	}
+
+	results := make([]LogTailResult, 0, len(logIDs))
+	for _, logID := range logIDs {
+		selected, ok := byID[logID]
+		if !ok {
+			results = append(results, LogTailResult{Error: "log file is not in the current nginx configuration"})
+			continue
+		}
+
+		content, actualLines, truncated, readErr := tailTextFile(selected.Path, lines, MaxLogBytes)
+		if readErr != nil {
+			results = append(results, LogTailResult{
+				File:  selected,
+				Error: fmt.Sprintf("read nginx log: %v", readErr),
+			})
+			continue
+		}
+		tail := LogTail{File: selected, Lines: actualLines, Truncated: truncated, Content: content}
+		results = append(results, LogTailResult{File: selected, Tail: &tail})
+	}
+	return results, nil
 }
 
 func tailTextFile(path string, lineLimit, byteLimit int) (string, int, bool, error) {

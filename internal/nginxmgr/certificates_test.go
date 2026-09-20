@@ -198,6 +198,126 @@ func TestIssueCertificateTransaction(t *testing.T) {
 	}
 }
 
+func TestUpdateSiteTLS(t *testing.T) {
+	t.Run("disable keeps certificate files", func(t *testing.T) {
+		snapshotDir := t.TempDir()
+		certRoot := t.TempDir()
+		t.Setenv("NGINX_MANAGER_SNAPSHOT_DIR", snapshotDir)
+		t.Setenv("NGINX_MANAGER_CERT_LIVE_DIR", certRoot)
+		writeTestCertificate(t, certRoot, "secure.example.com")
+
+		runner := &scriptedRunner{results: []runnerResult{
+			{output: "candidate ok"},
+			{output: "live ok"},
+			{output: "reload ok"},
+		}}
+		manager := newTestManager(t, runner)
+		path := filepath.Join(manager.Layout.AvailableDir, "nginx-manager-secure.example.com.conf")
+		tls := tlsConfigForSite("secure.example.com", true)
+		options := ProxyOptions{MaxBodySizeMB: 256, ConnectTimeoutSeconds: 12, ReadTimeoutSeconds: 180}
+		if err := os.WriteFile(path, renderReverseProxyManaged(
+			"secure.example.com",
+			"http://127.0.0.1:8002",
+			true,
+			tls,
+			acmeWebroot(),
+			options,
+		), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		site, err := manager.UpdateSiteTLS(context.Background(), "nginx-manager-secure.example.com.conf", UpdateTLSRequest{
+			Enabled: false,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if site.HTTPS || site.RedirectHTTPS {
+			t.Fatalf("TLS was not disabled: %+v", site)
+		}
+		if site.MaxBodySizeMB != 256 || site.ConnectTimeoutSeconds != 12 || site.ReadTimeoutSeconds != 180 {
+			t.Fatalf("proxy options were lost while disabling TLS: %+v", site)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "listen 443 ssl;") {
+			t.Fatalf("TLS directives remain:\n%s", data)
+		}
+		if !strings.Contains(string(data), "location ^~ /.well-known/acme-challenge/") {
+			t.Fatalf("ACME challenge route was removed:\n%s", data)
+		}
+		if _, err := os.Stat(filepath.Join(certRoot, "secure.example.com", "fullchain.pem")); err != nil {
+			t.Fatalf("certificate was removed: %v", err)
+		}
+
+		manager.Runner = &scriptedRunner{results: []runnerResult{
+			{output: "candidate ok"},
+			{output: "live ok"},
+			{output: "reload ok"},
+		}}
+		reenabled, err := manager.UpdateSiteTLS(context.Background(), "nginx-manager-secure.example.com.conf", UpdateTLSRequest{
+			Enabled:       true,
+			RedirectHTTPS: false,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reenabled.HTTPS || reenabled.RedirectHTTPS {
+			t.Fatalf("existing certificate was not reused: %+v", reenabled)
+		}
+		if reenabled.MaxBodySizeMB != 256 || reenabled.ConnectTimeoutSeconds != 12 || reenabled.ReadTimeoutSeconds != 180 {
+			t.Fatalf("proxy options were lost while re-enabling TLS: %+v", reenabled)
+		}
+	})
+
+	t.Run("toggle redirect preserves TLS", func(t *testing.T) {
+		snapshotDir := t.TempDir()
+		certRoot := t.TempDir()
+		t.Setenv("NGINX_MANAGER_SNAPSHOT_DIR", snapshotDir)
+		t.Setenv("NGINX_MANAGER_CERT_LIVE_DIR", certRoot)
+		writeTestCertificate(t, certRoot, "secure.example.com")
+
+		runner := &scriptedRunner{results: []runnerResult{
+			{output: "candidate ok"},
+			{output: "live ok"},
+			{output: "reload ok"},
+		}}
+		manager := newTestManager(t, runner)
+		path := filepath.Join(manager.Layout.AvailableDir, "nginx-manager-secure.example.com.conf")
+		tls := tlsConfigForSite("secure.example.com", false)
+		if err := os.WriteFile(path, renderReverseProxyManaged(
+			"secure.example.com",
+			"http://127.0.0.1:8002",
+			true,
+			tls,
+			acmeWebroot(),
+		), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		site, err := manager.UpdateSiteTLS(context.Background(), "nginx-manager-secure.example.com.conf", UpdateTLSRequest{
+			Enabled:       true,
+			RedirectHTTPS: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !site.HTTPS || !site.RedirectHTTPS {
+			t.Fatalf("redirect setting was not applied: %+v", site)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), redirectHTTPSMarker) ||
+			!strings.Contains(string(data), "listen 443 ssl;") {
+			t.Fatalf("TLS config invalid:\n%s", data)
+		}
+	})
+}
+
 func writeTestCertificate(t *testing.T, root, domain string) {
 	t.Helper()
 	dir := filepath.Join(root, domain)

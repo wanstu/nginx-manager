@@ -32,9 +32,10 @@ type Config struct {
 }
 
 type Info struct {
-	Version  string               `json:"version"`
-	Hostname string               `json:"hostname"`
-	Runtime  nginxmgr.RuntimeInfo `json:"runtime"`
+	Version    string               `json:"version"`
+	Hostname   string               `json:"hostname"`
+	Executable string               `json:"executable,omitempty"`
+	Runtime    nginxmgr.RuntimeInfo `json:"runtime"`
 }
 
 type NginxStatus struct {
@@ -147,7 +148,13 @@ func Serve(ctx context.Context, listen, version string) error {
 
 	protected("GET /api/v1/info", func(w http.ResponseWriter, r *http.Request) {
 		hostname, _ := os.Hostname()
-		writeJSON(w, http.StatusOK, Info{Version: version, Hostname: hostname, Runtime: nginxmgr.DetectRuntime(r.Context())})
+		executable, _ := os.Executable()
+		writeJSON(w, http.StatusOK, Info{
+			Version:    version,
+			Hostname:   hostname,
+			Executable: executable,
+			Runtime:    nginxmgr.DetectRuntime(r.Context()),
+		})
 	})
 
 	protected("GET /api/v1/nginx/status", func(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +184,27 @@ func Serve(ctx context.Context, listen, version string) error {
 		})
 	})
 
+	protected("GET /api/v1/diagnostics", func(w http.ResponseWriter, r *http.Request) {
+		manager, err := nginxmgr.New(r.Context())
+		if err != nil {
+			writeAPIError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		pathsConfig, pathsConfigured, _ := nginxmgr.LoadPathsConfig()
+		executable, _ := os.Executable()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"executable":        executable,
+			"runtime":           manager.Runtime,
+			"layout":            manager.Layout,
+			"services":          nginxmgr.DetectServiceDiagnostics(r.Context(), manager.Runtime),
+			"certbot":           nginxmgr.DetectCertbot(r.Context()),
+			"renewal_timer":     nginxmgr.DetectRenewalTimer(r.Context()),
+			"paths_config_path": nginxmgr.PathsConfigPath(),
+			"paths_configured":  pathsConfigured,
+			"paths_config":      pathsConfig,
+		})
+	})
+
 	protected("GET /api/v1/sites", func(w http.ResponseWriter, r *http.Request) {
 		manager, err := nginxmgr.New(r.Context())
 		if err != nil {
@@ -189,6 +217,34 @@ func Serve(ctx context.Context, listen, version string) error {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"sites": sites, "layout": manager.Layout})
+	})
+
+	protected("GET /api/v1/sites/{id}/config", func(w http.ResponseWriter, r *http.Request) {
+		manager, err := nginxmgr.New(r.Context())
+		if err != nil {
+			writeAPIError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		view, err := manager.ReadSiteConfig(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, view)
+	})
+
+	protected("GET /api/v1/sites/{id}/upstream-health", func(w http.ResponseWriter, r *http.Request) {
+		manager, err := nginxmgr.New(r.Context())
+		if err != nil {
+			writeAPIError(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		result, err := manager.CheckUpstream(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	})
 
 	protected("POST /api/v1/sites/reverse-proxy", func(w http.ResponseWriter, r *http.Request) {
@@ -348,6 +404,28 @@ func Serve(ctx context.Context, listen, version string) error {
 		writeJSON(w, http.StatusOK, response.Site)
 	})
 
+	protected("PUT /api/v1/sites/{id}/tls", func(w http.ResponseWriter, r *http.Request) {
+		var req nginxmgr.UpdateTLSRequest
+		if err := decodeJSONRequest(w, r, &req); err != nil {
+			writeAPIError(w, http.StatusBadRequest, err)
+			return
+		}
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationUpdateSiteTLS,
+			SiteID:    r.PathValue("id"),
+			TLS:       &req,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusConflict, err)
+			return
+		}
+		if response.Site == nil {
+			writeAPIError(w, http.StatusInternalServerError, errors.New("privileged helper returned no site result"))
+			return
+		}
+		writeJSON(w, http.StatusOK, response.Site)
+	})
+
 	protected("POST /api/v1/certificates/renew", func(w http.ResponseWriter, r *http.Request) {
 		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
 			Operation: privilege.OperationRenewCertificates,
@@ -357,6 +435,21 @@ func Serve(ctx context.Context, listen, version string) error {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"output": response.Output})
+	})
+
+	protected("POST /api/v1/nginx/reload", func(w http.ResponseWriter, r *http.Request) {
+		response, err := privilege.Apply(r.Context(), privilege.ApplyRequest{
+			Operation: privilege.OperationSafeReload,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusConflict, err)
+			return
+		}
+		if response.Reload == nil {
+			writeAPIError(w, http.StatusInternalServerError, errors.New("privileged helper returned no reload result"))
+			return
+		}
+		writeJSON(w, http.StatusOK, response.Reload)
 	})
 
 	protected("GET /api/v1/logs", func(w http.ResponseWriter, r *http.Request) {

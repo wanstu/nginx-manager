@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,9 +24,14 @@ const managedMarker = "# managed-by: nginx-manager"
 var mutationMu sync.Mutex
 
 var (
-	serverNameRE     = regexp.MustCompile("(?m)^\\s*server_name\\s+([^;]+);")
-	proxyPassRE      = regexp.MustCompile("(?m)^\\s*proxy_pass\\s+([^;]+);")
-	sslCertificateRE = regexp.MustCompile("(?m)^\\s*ssl_certificate\\s+([^;]+);")
+	serverNameRE          = regexp.MustCompile("(?m)^\\s*server_name\\s+([^;]+);")
+	proxyPassRE           = regexp.MustCompile("(?m)^\\s*proxy_pass\\s+([^;]+);")
+	sslCertificateRE      = regexp.MustCompile("(?m)^\\s*ssl_certificate\\s+([^;]+);")
+	clientMaxBodySizeRE   = regexp.MustCompile("(?m)^\\s*client_max_body_size\\s+(\\d+)m;")
+	proxyConnectTimeoutRE = regexp.MustCompile("(?m)^\\s*proxy_connect_timeout\\s+(\\d+)s;")
+	proxyReadTimeoutRE    = regexp.MustCompile("(?m)^\\s*proxy_read_timeout\\s+(\\d+)s;")
+	accessLogRE           = regexp.MustCompile(`(?m)^\s*access_log\s+("[^"]+"|'[^']+'|[^;\s]+)`)
+	errorLogRE            = regexp.MustCompile(`(?m)^\s*error_log\s+("[^"]+"|'[^']+'|[^;\s]+)`)
 )
 
 type RuntimeInfo struct {
@@ -43,28 +49,47 @@ type Layout struct {
 }
 
 type Site struct {
-	ID            string `json:"id"`
-	ServerName    string `json:"server_name"`
-	ProxyPass     string `json:"proxy_pass,omitempty"`
-	Enabled       bool   `json:"enabled"`
-	Managed       bool   `json:"managed"`
-	WebSocket     bool   `json:"websocket"`
-	HTTPS         bool   `json:"https"`
-	RedirectHTTPS bool   `json:"redirect_https"`
-	Certificate   string `json:"certificate,omitempty"`
-	Path          string `json:"path"`
+	ID                    string `json:"id"`
+	ServerName            string `json:"server_name"`
+	ProxyPass             string `json:"proxy_pass,omitempty"`
+	Enabled               bool   `json:"enabled"`
+	Managed               bool   `json:"managed"`
+	WebSocket             bool   `json:"websocket"`
+	HTTPS                 bool   `json:"https"`
+	RedirectHTTPS         bool   `json:"redirect_https"`
+	Certificate           string `json:"certificate,omitempty"`
+	MaxBodySizeMB         int    `json:"max_body_size_mb"`
+	ConnectTimeoutSeconds int    `json:"connect_timeout_seconds"`
+	ReadTimeoutSeconds    int    `json:"read_timeout_seconds"`
+	AccessLog             string `json:"access_log,omitempty"`
+	ErrorLog              string `json:"error_log,omitempty"`
+	Path                  string `json:"path"`
 }
 
 type ReverseProxyRequest struct {
-	ServerName string `json:"server_name"`
-	Upstream   string `json:"upstream"`
-	WebSocket  bool   `json:"websocket"`
+	ServerName            string `json:"server_name"`
+	Upstream              string `json:"upstream"`
+	WebSocket             bool   `json:"websocket"`
+	MaxBodySizeMB         int    `json:"max_body_size_mb"`
+	ConnectTimeoutSeconds int    `json:"connect_timeout_seconds"`
+	ReadTimeoutSeconds    int    `json:"read_timeout_seconds"`
 }
 
 type UpdateReverseProxyRequest struct {
-	ServerName string `json:"server_name"`
-	Upstream   string `json:"upstream"`
-	WebSocket  bool   `json:"websocket"`
+	ServerName            string `json:"server_name"`
+	Upstream              string `json:"upstream"`
+	WebSocket             bool   `json:"websocket"`
+	MaxBodySizeMB         int    `json:"max_body_size_mb"`
+	ConnectTimeoutSeconds int    `json:"connect_timeout_seconds"`
+	ReadTimeoutSeconds    int    `json:"read_timeout_seconds"`
+}
+
+type ProxyOptions struct {
+	MaxBodySizeMB         int
+	ConnectTimeoutSeconds int
+	ReadTimeoutSeconds    int
+	AccessLog             string
+	ErrorLog              string
 }
 
 type ApplyResult struct {
@@ -91,6 +116,9 @@ type Manager struct {
 }
 
 func New(ctx context.Context) (*Manager, error) {
+	if _, _, err := LoadPathsConfig(); err != nil {
+		return nil, err
+	}
 	runtime := DetectRuntime(ctx)
 	if runtime.Path == "" {
 		return nil, errors.New("nginx/openresty executable not found")
@@ -181,7 +209,7 @@ func (m *Manager) ListSites() ([]Site, error) {
 			continue
 		}
 		path := filepath.Join(m.Layout.AvailableDir, entry.Name())
-		data, err := os.ReadFile(path)
+		data, err := m.readSiteConfigFile(path)
 		if err != nil {
 			continue
 		}
@@ -201,6 +229,8 @@ func (m *Manager) ListSites() ([]Site, error) {
 			site.ProxyPass = strings.TrimSpace(match[1])
 		}
 		site.WebSocket = websocketEnabled(text)
+		applyProxyOptionFields(&site, text)
+		applySiteLogFields(&site, text)
 		applyTLSFields(&site, text)
 		sites = append(sites, site)
 	}
@@ -215,6 +245,50 @@ func (m *Manager) ListSites() ([]Site, error) {
 		return left < right
 	})
 	return sites, nil
+}
+
+func applyProxyOptionFields(site *Site, text string) {
+	if match := clientMaxBodySizeRE.FindStringSubmatch(text); len(match) == 2 {
+		site.MaxBodySizeMB, _ = strconv.Atoi(match[1])
+	}
+	if match := proxyConnectTimeoutRE.FindStringSubmatch(text); len(match) == 2 {
+		site.ConnectTimeoutSeconds, _ = strconv.Atoi(match[1])
+	}
+	if match := proxyReadTimeoutRE.FindStringSubmatch(text); len(match) == 2 {
+		site.ReadTimeoutSeconds, _ = strconv.Atoi(match[1])
+	}
+}
+
+func proxyOptionsFromSite(site Site) ProxyOptions {
+	return ProxyOptions{
+		MaxBodySizeMB:         site.MaxBodySizeMB,
+		ConnectTimeoutSeconds: site.ConnectTimeoutSeconds,
+		ReadTimeoutSeconds:    site.ReadTimeoutSeconds,
+		AccessLog:             site.AccessLog,
+		ErrorLog:              site.ErrorLog,
+	}
+}
+
+func applySiteLogFields(site *Site, text string) {
+	if match := accessLogRE.FindStringSubmatch(text); len(match) == 2 {
+		site.AccessLog = strings.Trim(strings.TrimSpace(match[1]), "'\"")
+	}
+	if match := errorLogRE.FindStringSubmatch(text); len(match) == 2 {
+		site.ErrorLog = strings.Trim(strings.TrimSpace(match[1]), "'\"")
+	}
+}
+
+func validateProxyOptions(options ProxyOptions) (ProxyOptions, error) {
+	if options.MaxBodySizeMB < 0 || options.MaxBodySizeMB > 10240 {
+		return ProxyOptions{}, errors.New("max_body_size_mb must be between 0 and 10240")
+	}
+	if options.ConnectTimeoutSeconds < 0 || options.ConnectTimeoutSeconds > 300 {
+		return ProxyOptions{}, errors.New("connect_timeout_seconds must be between 0 and 300")
+	}
+	if options.ReadTimeoutSeconds < 0 || options.ReadTimeoutSeconds > 86400 {
+		return ProxyOptions{}, errors.New("read_timeout_seconds must be between 0 and 86400")
+	}
+	return options, nil
 }
 
 func websocketEnabled(text string) bool {
@@ -241,6 +315,22 @@ func (m *Manager) CreateReverseProxy(ctx context.Context, req ReverseProxyReques
 	if err != nil {
 		return ApplyResult{}, err
 	}
+	options, err := validateProxyOptions(ProxyOptions{
+		MaxBodySizeMB:         req.MaxBodySizeMB,
+		ConnectTimeoutSeconds: req.ConnectTimeoutSeconds,
+		ReadTimeoutSeconds:    req.ReadTimeoutSeconds,
+	})
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if err := ensureManagedSiteLogDir(); err != nil {
+		return ApplyResult{}, err
+	}
+	options, err = withManagedSiteLogs(options, serverName)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+
 	name := siteFileName(serverName, m.Layout.Mode)
 	target := filepath.Join(m.Layout.AvailableDir, name)
 	if _, err := os.Lstat(target); err == nil {
@@ -249,11 +339,11 @@ func (m *Manager) CreateReverseProxy(ctx context.Context, req ReverseProxyReques
 		return ApplyResult{}, fmt.Errorf("check site target: %w", err)
 	}
 
-	content := renderReverseProxy(serverName, upstream, req.WebSocket)
+	content := renderReverseProxyManaged(serverName, upstream, req.WebSocket, nil, "", options)
 	if err := m.validateCandidate(ctx, name, content); err != nil {
 		return ApplyResult{}, err
 	}
-	return m.applySite(ctx, name, content, serverName, upstream, req.WebSocket)
+	return m.applySite(ctx, name, content)
 }
 
 func validateServerName(value string) (string, error) {
@@ -311,7 +401,11 @@ func renderReverseProxy(serverName, upstream string, websocket bool) []byte {
 	return renderReverseProxyManaged(serverName, upstream, websocket, nil, "")
 }
 
-func renderReverseProxyManaged(serverName, upstream string, websocket bool, tls *TLSConfig, acmeRoot string) []byte {
+func renderReverseProxyManaged(serverName, upstream string, websocket bool, tls *TLSConfig, acmeRoot string, optionValues ...ProxyOptions) []byte {
+	options := ProxyOptions{}
+	if len(optionValues) > 0 {
+		options = optionValues[0]
+	}
 	var b strings.Builder
 	b.WriteString(managedMarker + "\n")
 	b.WriteString("# generated; edit through nginx-manager\n")
@@ -326,14 +420,16 @@ func renderReverseProxyManaged(serverName, upstream string, websocket bool, tls 
 	b.WriteString("server {\n")
 	b.WriteString("    listen 80;\n")
 	b.WriteString("    listen [::]:80;\n")
-	b.WriteString("    server_name " + serverName + ";\n\n")
+	b.WriteString("    server_name " + serverName + ";\n")
+	writeServerProxyOptions(&b, options)
+	b.WriteString("\n")
 	writeACMELocation(&b, acmeRoot)
 	if tls != nil && tls.RedirectHTTPS {
 		b.WriteString("    location / {\n")
 		b.WriteString("        return 301 https://$host$request_uri;\n")
 		b.WriteString("    }\n")
 	} else {
-		writeProxyLocation(&b, upstream, websocket)
+		writeProxyLocation(&b, upstream, websocket, options)
 	}
 	b.WriteString("}\n")
 
@@ -343,8 +439,10 @@ func renderReverseProxyManaged(serverName, upstream string, websocket bool, tls 
 		b.WriteString("    listen [::]:443 ssl;\n")
 		b.WriteString("    server_name " + serverName + ";\n")
 		b.WriteString("    ssl_certificate " + tls.FullchainPath + ";\n")
-		b.WriteString("    ssl_certificate_key " + tls.PrivateKeyPath + ";\n\n")
-		writeProxyLocation(&b, upstream, websocket)
+		b.WriteString("    ssl_certificate_key " + tls.PrivateKeyPath + ";\n")
+		writeServerProxyOptions(&b, options)
+		b.WriteString("\n")
+		writeProxyLocation(&b, upstream, websocket, options)
 		b.WriteString("}\n")
 	}
 	return []byte(b.String())
@@ -361,7 +459,19 @@ func writeACMELocation(b *strings.Builder, acmeRoot string) {
 	b.WriteString("    }\n\n")
 }
 
-func writeProxyLocation(b *strings.Builder, upstream string, websocket bool) {
+func writeServerProxyOptions(b *strings.Builder, options ProxyOptions) {
+	if options.AccessLog != "" {
+		b.WriteString("    access_log " + nginxQuote(options.AccessLog) + ";\n")
+	}
+	if options.ErrorLog != "" {
+		b.WriteString("    error_log " + nginxQuote(options.ErrorLog) + ";\n")
+	}
+	if options.MaxBodySizeMB > 0 {
+		b.WriteString(fmt.Sprintf("    client_max_body_size %dm;\n", options.MaxBodySizeMB))
+	}
+}
+
+func writeProxyLocation(b *strings.Builder, upstream string, websocket bool, options ProxyOptions) {
 	b.WriteString("    location / {\n")
 	b.WriteString("        proxy_pass " + upstream + ";\n")
 	b.WriteString("        proxy_http_version 1.1;\n")
@@ -369,6 +479,12 @@ func writeProxyLocation(b *strings.Builder, upstream string, websocket bool) {
 	b.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
 	b.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
 	b.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
+	if options.ConnectTimeoutSeconds > 0 {
+		b.WriteString(fmt.Sprintf("        proxy_connect_timeout %ds;\n", options.ConnectTimeoutSeconds))
+	}
+	if options.ReadTimeoutSeconds > 0 {
+		b.WriteString(fmt.Sprintf("        proxy_read_timeout %ds;\n", options.ReadTimeoutSeconds))
+	}
 	if websocket {
 		b.WriteString("        proxy_set_header Upgrade $http_upgrade;\n")
 		b.WriteString("        proxy_set_header Connection \"upgrade\";\n")
@@ -412,7 +528,7 @@ func nginxQuote(value string) string {
 	return "\"" + strings.ReplaceAll(value, "\"", "\\\"") + "\""
 }
 
-func (m *Manager) applySite(ctx context.Context, name string, content []byte, serverName, upstream string, websocket bool) (ApplyResult, error) {
+func (m *Manager) applySite(ctx context.Context, name string, content []byte) (ApplyResult, error) {
 	target := filepath.Join(m.Layout.AvailableDir, name)
 	enabled := filepath.Join(m.Layout.EnabledDir, name)
 	if err := atomicfile.Write(target, content, 0o644); err != nil {
@@ -452,7 +568,7 @@ func (m *Manager) applySite(ctx context.Context, name string, content []byte, se
 		return ApplyResult{}, fmt.Errorf("nginx reload failed; rolled back: %s", reloadOutput)
 	}
 	return ApplyResult{
-		Site:       Site{ID: name, ServerName: serverName, ProxyPass: upstream, Enabled: true, Managed: true, WebSocket: websocket, Path: target},
+		Site:       parseManagedSite(name, target, true, content),
 		TestOutput: output,
 	}, nil
 }

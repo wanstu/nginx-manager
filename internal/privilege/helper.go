@@ -49,10 +49,11 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 	}
 
 	response := ApplyResponse{}
-	hasLogArgs := request.LogID != "" || request.Lines != 0
+	hasLogArgs := request.LogID != "" || len(request.LogIDs) != 0 || request.Lines != 0
+	hasTLS := request.TLS != nil
 	switch request.Operation {
 	case OperationProbe:
-		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs {
+		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs || hasTLS {
 			return errors.New("invalid probe request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -70,7 +71,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		renewalTimer := nginxmgr.DetectRenewalTimer(ctx)
 		response.RenewalTimer = &renewalTimer
 	case OperationCreateReverseProxy:
-		if request.Create == nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs {
+		if request.Create == nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs || hasTLS {
 			return errors.New("invalid create_reverse_proxy request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -85,7 +86,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.OK = true
 		response.Apply = &result
 	case OperationUpdateReverseProxy:
-		if request.Create != nil || request.Update == nil || request.Issue != nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs {
+		if request.Create != nil || request.Update == nil || request.Issue != nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs || hasTLS {
 			return errors.New("invalid update_reverse_proxy request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -100,7 +101,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.OK = true
 		response.Apply = &result
 	case OperationSetSiteEnabled:
-		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs {
+		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs || hasTLS {
 			return errors.New("invalid set_site_enabled request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -115,7 +116,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.OK = true
 		response.Site = &site
 	case OperationDeleteSite:
-		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs {
+		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs || hasTLS {
 			return errors.New("invalid delete_site request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -130,7 +131,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.OK = true
 		response.Site = &site
 	case OperationListSnapshots:
-		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit < 0 || request.Limit > 100 || hasLogArgs {
+		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit < 0 || request.Limit > 100 || hasLogArgs || hasTLS {
 			return errors.New("invalid list_snapshots request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -145,7 +146,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.OK = true
 		response.Snapshots = snapshots
 	case OperationRestoreSnapshot:
-		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID == "" || request.Limit != 0 || hasLogArgs {
+		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID == "" || request.Limit != 0 || hasLogArgs || hasTLS {
 			return errors.New("invalid restore_snapshot request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -160,7 +161,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.OK = true
 		response.Site = &site
 	case OperationListCertificates:
-		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs {
+		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs || hasTLS {
 			return errors.New("invalid list_certificates request")
 		}
 		certificates, err := nginxmgr.ListCertificates()
@@ -175,7 +176,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.Certbot = &certbot
 		response.RenewalTimer = &renewalTimer
 	case OperationIssueCertificate:
-		if request.Create != nil || request.Update != nil || request.Issue == nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs {
+		if request.Create != nil || request.Update != nil || request.Issue == nil || request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs || hasTLS {
 			return errors.New("invalid issue_certificate request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -190,7 +191,7 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		response.OK = true
 		response.Site = &site
 	case OperationRenewCertificates:
-		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs {
+		if request.Create != nil || request.Update != nil || request.Issue != nil || request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs || hasTLS {
 			return errors.New("invalid renew_certificates request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -204,10 +205,43 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 		}
 		response.OK = true
 		response.Output = output
+	case OperationSafeReload:
+		if request.Create != nil || request.Update != nil || request.Issue != nil ||
+			request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs || hasTLS {
+			return errors.New("invalid safe_reload request")
+		}
+		manager, err := nginxmgr.New(ctx)
+		if err != nil {
+			return err
+		}
+		result, err := manager.SafeReload(ctx)
+		if err != nil {
+			response.Error = err.Error()
+			response.Reload = &result
+			break
+		}
+		response.OK = true
+		response.Reload = &result
+	case OperationUpdateSiteTLS:
+		if request.Create != nil || request.Update != nil || request.Issue != nil || request.TLS == nil ||
+			request.SiteID == "" || request.SnapshotID != "" || request.Limit != 0 || hasLogArgs {
+			return errors.New("invalid update_site_tls request")
+		}
+		manager, err := nginxmgr.New(ctx)
+		if err != nil {
+			return err
+		}
+		site, err := manager.UpdateSiteTLS(ctx, request.SiteID, *request.TLS)
+		if err != nil {
+			response.Error = err.Error()
+			break
+		}
+		response.OK = true
+		response.Site = &site
 	case OperationListLogs:
 		if request.Create != nil || request.Update != nil || request.Issue != nil ||
 			request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 ||
-			request.LogID != "" || request.Lines != 0 {
+			hasLogArgs || hasTLS {
 			return errors.New("invalid list_logs request")
 		}
 		manager, err := nginxmgr.New(ctx)
@@ -224,7 +258,8 @@ func RunPrivilegedApply(ctx context.Context, input io.Reader, output io.Writer) 
 	case OperationTailLog:
 		if request.Create != nil || request.Update != nil || request.Issue != nil ||
 			request.SiteID != "" || request.SnapshotID != "" || request.Limit != 0 ||
-			request.LogID == "" || request.Lines < 1 || request.Lines > nginxmgr.MaxLogLines {
+			request.LogID == "" || len(request.LogIDs) != 0 ||
+			request.Lines < 1 || request.Lines > nginxmgr.MaxLogLines || hasTLS {
 			return errors.New("invalid tail_log request")
 		}
 		manager, err := nginxmgr.New(ctx)

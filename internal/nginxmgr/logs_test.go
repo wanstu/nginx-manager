@@ -31,7 +31,7 @@ func TestListLogsRestrictsPathsAndTailIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	accessPath := filepath.Join(logDir, "access.log")
+	accessPath := filepath.Join(logDir, "site access.log")
 	var body strings.Builder
 	for i := 1; i <= 300; i++ {
 		fmt.Fprintf(&body, "line-%03d\n", i)
@@ -45,7 +45,7 @@ func TestListLogsRestrictsPathsAndTailIsBounded(t *testing.T) {
 		Layout:  Layout{MainConfig: filepath.Join(prefix, "nginx.conf")},
 		Runner: logRunner{
 			prefix: prefix,
-			config: "http {\n    access_log " + accessPath + ";\n    error_log /etc/passwd;\n}\n",
+			config: "http {\n    access_log \"" + accessPath + "\";\n    error_log /etc/passwd;\n}\n",
 		},
 	}
 

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wanstu/nginx-manager/internal/deploy"
+	"github.com/wanstu/nginx-manager/internal/nginxmgr"
 	"github.com/wanstu/nginx-manager/internal/privilege"
 	"github.com/wanstu/nginx-manager/internal/server"
 	"golang.org/x/term"
@@ -118,7 +120,19 @@ func run(args []string) error {
 			fmt.Println(path)
 			return nil
 		}
-		return errors.New("usage: nginx-manager config path")
+		if len(args) == 2 && args[1] == "paths-file" {
+			fmt.Println(nginxmgr.PathsConfigPath())
+			return nil
+		}
+		if len(args) == 2 && args[1] == "paths-template" {
+			data, err := json.MarshalIndent(nginxmgr.PathsConfigTemplate(), "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(data))
+			return nil
+		}
+		return errors.New("usage: nginx-manager config path | config paths-file | config paths-template")
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -172,6 +186,8 @@ Usage:
   nginx-manager service renewal-service [--binary /usr/local/bin/nginx-manager]
   nginx-manager service renewal-timer
   nginx-manager config path
+  nginx-manager config paths-file
+  nginx-manager config paths-template
   nginx-manager version
 
 The API refuses to start until a management password is configured.
