@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Nginx Manager
+Comment=Manage Nginx and OpenResty servers through Nginx Manager CLI
+Exec=nginx-manager-desktop
+Icon=nginx-manager-desktop
+Terminal=false
+Categories=Network;Utility;
+StartupNotify=true

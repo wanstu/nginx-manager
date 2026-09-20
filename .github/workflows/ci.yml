@@ -69,7 +69,7 @@ jobs:
     name: Desktop
     uses: wanstu/wails-desktop-kit/.github/workflows/wails-desktop.yml@v0.8.0
     with:
-      app-name: nginx-manager
+      app-name: nginx-manager-desktop
       desktop-dir: cmd/nginx-manager-desktop
       desktopkit-cli-version: v0.8.0
       test-command: ""
