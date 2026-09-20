@@ -44,6 +44,7 @@ GET    /healthz
 GET    /api/v1/info                      Basic Auth
 GET    /api/v1/capabilities              Basic Auth
 GET    /api/v1/diagnostics               Basic Auth
+GET    /api/v1/deployment/plan            Basic Auth
 GET    /api/v1/nginx/status              Basic Auth
 GET    /api/v1/privilege/status          Basic Auth
 GET    /api/v1/sites                     Basic Auth
@@ -67,6 +68,8 @@ GET    /api/v1/logs/{id}?lines=200       Basic Auth
 Basic Auth 用户名固定为 `admin`，密码为 CLI 初始化时设置的管理密码。
 
 `/api/v1/info` 与 `/api/v1/capabilities` 会返回 API 版本和能力列表。Desktop 只有在服务端明确声明能力时才按能力禁用页面；旧版 CLI 没有能力字段时进入兼容模式，不会把功能误判为不支持。这样同一个 Desktop 可以更安全地管理不同版本的 CLI。
+
+`/api/v1/deployment/plan` 由 CLI 根据服务器真实状态生成生产部署步骤和命令，Desktop 只负责展示与复制，避免在不同 CLI 版本之间硬编码 sudoers、systemd 和路径模板。
 
 ### 反向代理事务
 
@@ -190,6 +193,7 @@ Desktop 当前能：
 - 在 Desktop 本地按站点域名和关键词过滤当前日志样本，并从站点列表快捷跳转到日志 / HTTPS 管理；
 - 总览展示证书过期/临期、HTTPS 站点证书匹配、自动续期维护提醒和按域名匹配的站点访问样本；
 - 支持 15 分钟 / 1 小时 / 6 小时 / 24 小时访问样本窗口（基于最近最多 1000 行，不作为完整历史统计）；
-- 系统诊断页只读展示 nginx-manager.service、Nginx/OpenResty service、Certbot、renewal timer、运行时布局和可信路径配置。
+- 系统诊断页只读展示 nginx-manager.service、Nginx/OpenResty service、Certbot、renewal timer、运行时布局和可信路径配置；
+- 部署向导按服务用户、密码归属、可信路径、最小 sudoers、systemd、Certbot/续期和 doctor 验证逐步检查，每一步只生成可复制命令，Desktop 不远程执行 root 安装操作。
 
-下一阶段：部署向导、证书维护历史与更长期的流量统计。
+下一阶段：更长期的流量统计与跨服务器批量运维。

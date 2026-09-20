@@ -78,6 +78,7 @@ func TestCapabilityFeaturesStable(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	required := map[string]bool{
+		"deployment_plan":     false,
 		"sites_read":          false,
 		"sites_write":         false,
 		"https_acme":          false,

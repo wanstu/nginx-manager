@@ -24,6 +24,7 @@
         <button class="nav-item" data-view="snapshots">快照与恢复</button>
         <button class="nav-item" data-view="certificates">HTTPS / 证书</button>
         <button class="nav-item" data-view="logs">访问与错误日志</button>
+        <button class="nav-item" data-view="deployment">部署向导</button>
         <button class="nav-item" data-view="diagnostics">系统诊断</button>
       </nav>
 
@@ -301,6 +302,50 @@
         </section>
       </div>
 
+      <div id="deploymentView" class="view hidden">
+        <section class="card">
+          <div class="section-title inline">
+            <div>
+              <h2>部署进度</h2>
+              <p>由当前 CLI 生成计划；Desktop 不执行远端 sudo，只提供可审阅、可复制的命令。</p>
+            </div>
+            <div class="actions">
+              <button id="copyDeploymentAllBtn">复制未完成步骤</button>
+              <button id="refreshDeploymentBtn">重新检查</button>
+            </div>
+          </div>
+          <div class="deployment-summary">
+            <div><span>核心步骤</span><strong id="deploymentRequired">—</strong></div>
+            <div><span>全部步骤</span><strong id="deploymentTotal">—</strong></div>
+            <div><span>部署状态</span><strong id="deploymentStatus">—</strong></div>
+          </div>
+          <pre id="deploymentMessage">选择连接后生成部署计划。</pre>
+        </section>
+
+        <section class="card">
+          <div class="section-title">
+            <div>
+              <h2>分步部署</h2>
+              <p>核心步骤必须完成；systemd、Certbot 与自动续期属于推荐的运维能力。</p>
+            </div>
+          </div>
+          <div id="deploymentSteps" class="deployment-step-list">
+            <div class="empty large">尚未生成部署计划</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-title inline">
+            <div>
+              <h2>最终验证</h2>
+              <p>部署完成后，以 API 服务用户运行 doctor，确保密码配置目录和 systemd 服务一致。</p>
+            </div>
+            <button id="copyDeploymentVerifyBtn">复制验证命令</button>
+          </div>
+          <pre id="deploymentVerify">尚未生成验证命令。</pre>
+        </section>
+      </div>
+
       <div id="diagnosticsView" class="view hidden">
         <section class="card">
           <div class="section-title inline">
@@ -324,35 +369,14 @@
         <section class="card">
           <div class="section-title">
             <div>
-              <h2>部署就绪检查</h2>
-              <p>核心安全链路与可选运维能力分开判断。</p>
-            </div>
-          </div>
-          <div id="readinessList" class="readiness-list">
-            <div class="empty large">尚未运行部署就绪检查</div>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="section-title inline">
-            <div>
-              <h2>部署辅助命令</h2>
-              <p>根据当前诊断生成建议命令；只供复制，不会由 Desktop 执行。</p>
-            </div>
-            <button id="copyDeploymentCommandsBtn">复制命令</button>
-          </div>
-          <pre id="deploymentCommands">运行诊断后生成部署辅助命令。</pre>
-        </section>
-
-        <section class="card">
-          <div class="section-title">
-            <div>
               <h2>运行时与配置布局</h2>
               <p>用于确认实际 Nginx/OpenResty 二进制和当前站点目录。</p>
             </div>
           </div>
           <div class="diagnostic-detail-grid">
             <div><span>Nginx Manager 程序</span><strong id="diagManagerExecutable">—</strong></div>
+            <div><span>CLI 运行用户</span><strong id="diagProcessUser">—</strong></div>
+            <div><span>CLI 配置</span><strong id="diagProcessConfig">—</strong></div>
             <div><span>运行时</span><strong id="diagRuntimeKind">—</strong></div>
             <div><span>Nginx / OpenResty 二进制</span><strong id="diagRuntimePath">—</strong></div>
             <div><span>布局</span><strong id="diagLayoutMode">—</strong></div>

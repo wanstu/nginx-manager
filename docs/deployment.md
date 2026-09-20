@@ -201,6 +201,18 @@ CLI Endpoint：http://127.0.0.1:8020
 
 Desktop 允许回环地址使用 HTTP；非回环远程地址必须使用 HTTPS。
 
+连接成功后可直接进入侧边栏 **部署向导**。向导由当前 CLI 的 `/api/v1/deployment/plan` 生成，并按生产部署顺序检查：
+
+1. CLI 是否由 `nginx-manager` 专用低权限用户运行；
+2. 管理密码是否属于该服务用户；
+3. `/etc/nginx-manager/paths.json` 是否已安装；
+4. 最小 sudoers / root helper 是否可用；
+5. `nginx-manager.service` 是否 installed + enabled + active；
+6. 可选的 Certbot 与自动续期 Timer；
+7. 最终 `nginx-manager doctor` 验证。
+
+每一步只生成和复制命令，Desktop **不会**通过 API 远程执行 `sudo`、`useradd`、包管理器或 systemd 安装操作。执行完服务器命令后点击“重新检查”即可继续下一步。
+
 ## 快照
 
 Manager 管理的站点在停用或删除前会自动保存 root-only 快照：

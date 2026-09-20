@@ -9,11 +9,13 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/wanstu/nginx-manager/internal/deploy"
 	"github.com/wanstu/nginx-manager/internal/nginxmgr"
 	"github.com/wanstu/nginx-manager/internal/privilege"
 	"github.com/wanstu/wails-desktop-kit/jsonstore"
@@ -28,6 +30,7 @@ const (
 )
 
 var capabilityFeatures = []string{
+	"deployment_plan",
 	"diagnostics",
 	"https_acme",
 	"logs",
@@ -60,6 +63,24 @@ type Capabilities struct {
 	Version      string   `json:"version"`
 	APIVersion   int      `json:"api_version"`
 	Capabilities []string `json:"capabilities"`
+}
+
+type ProcessIdentity struct {
+	Username   string `json:"username,omitempty"`
+	UID        string `json:"uid,omitempty"`
+	HomeDir    string `json:"home_dir,omitempty"`
+	ConfigPath string `json:"config_path,omitempty"`
+}
+
+func currentProcessIdentity() ProcessIdentity {
+	identity := ProcessIdentity{}
+	if current, err := user.Current(); err == nil && current != nil {
+		identity.Username = current.Username
+		identity.UID = current.Uid
+		identity.HomeDir = current.HomeDir
+	}
+	identity.ConfigPath, _ = ConfigPath()
+	return identity
 }
 
 type NginxStatus struct {
@@ -228,6 +249,7 @@ func Serve(ctx context.Context, listen, version string) error {
 		executable, _ := os.Executable()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"executable":        executable,
+			"process":           currentProcessIdentity(),
 			"runtime":           manager.Runtime,
 			"layout":            manager.Layout,
 			"services":          nginxmgr.DetectServiceDiagnostics(r.Context(), manager.Runtime),
@@ -237,6 +259,59 @@ func Serve(ctx context.Context, listen, version string) error {
 			"paths_configured":  pathsConfigured,
 			"paths_config":      pathsConfig,
 		})
+	})
+
+	protected("GET /api/v1/deployment/plan", func(w http.ResponseWriter, r *http.Request) {
+		executable, err := os.Executable()
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err)
+			return
+		}
+
+		runtime := nginxmgr.DetectRuntime(r.Context())
+		services := nginxmgr.DetectServiceDiagnostics(r.Context(), runtime)
+		certbot := nginxmgr.DetectCertbot(r.Context())
+		renewal := nginxmgr.DetectRenewalTimer(r.Context())
+		_, pathsConfigured, _ := nginxmgr.LoadPathsConfig()
+
+		nginxOK := false
+		nginxOutput := ""
+		if manager, managerErr := nginxmgr.New(r.Context()); managerErr != nil {
+			nginxOutput = managerErr.Error()
+		} else {
+			nginxOK, nginxOutput = manager.Status(r.Context())
+		}
+
+		privilegeReady := false
+		if response, probeErr := privilege.Apply(r.Context(), privilege.ApplyRequest{Operation: privilege.OperationProbe}); probeErr == nil {
+			privilegeReady = response.ConfigOK
+		}
+		identity := currentProcessIdentity()
+		passwordConfigured, _ := HasPassword()
+
+		plan, err := deploy.BuildPlan(deploy.PlanInput{
+			Executable:                   executable,
+			ServiceUser:                  "nginx-manager",
+			CurrentUser:                  identity.Username,
+			ManagementPasswordConfigured: passwordConfigured,
+			PrivilegeReady:               privilegeReady,
+			PathsConfigured:              pathsConfigured,
+			NginxConfigOK:                nginxOK,
+			NginxTestOutput:              nginxOutput,
+			SystemdAvailable:             services.SystemdAvailable,
+			ManagerInstalled:             services.Manager.Installed,
+			ManagerEnabled:               services.Manager.Enabled,
+			ManagerActive:                services.Manager.Active,
+			CertbotAvailable:             certbot.Available,
+			RenewalInstalled:             renewal.Installed,
+			RenewalEnabled:               renewal.Enabled,
+			RenewalActive:                renewal.Active,
+		})
+		if err != nil {
+			writeAPIError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, plan)
 	})
 
 	protected("GET /api/v1/sites", func(w http.ResponseWriter, r *http.Request) {

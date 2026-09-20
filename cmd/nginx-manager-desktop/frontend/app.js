@@ -16,6 +16,7 @@ const state = {
   logAutoTimer: null,
   overview: null,
   diagnostics: null,
+  deploymentPlan: null,
   pendingLogSite: "",
   pendingLogPath: "",
   pendingCertificateSiteID: "",
@@ -31,6 +32,7 @@ function $(id) {
 }
 
 const viewCapabilities = {
+  deployment: "deployment_plan",
   sites: "sites_read",
   snapshots: "snapshots",
   certificates: "https_acme",
@@ -39,6 +41,7 @@ const viewCapabilities = {
 };
 
 const desktopKnownCapabilities = [
+  "deployment_plan",
   "diagnostics",
   "https_acme",
   "logs",
@@ -68,9 +71,9 @@ async function loadCapabilities(connectionID) {
   applyCapabilityUI();
   const capability = state.capabilities[connectionID];
   const requiredCapability = viewCapabilities[state.view];
-  if (capability?.known &&
+  if (connectionID === state.selected &&
       requiredCapability &&
-      (capability.compatible === false || !(capability.capabilities || []).includes(requiredCapability))) {
+      !hasCapability(requiredCapability)) {
     activateView("overview");
   }
   return capability;
@@ -82,7 +85,7 @@ function currentCapabilities() {
 
 function hasCapability(feature) {
   const capability = currentCapabilities();
-  if (!capability?.known) return true;
+  if (!capability?.known) return feature !== "deployment_plan";
   if (capability.compatible === false) return false;
   return (capability.capabilities || []).includes(feature);
 }
@@ -91,17 +94,23 @@ function applyCapabilityUI() {
   const capability = currentCapabilities();
   document.querySelectorAll(".nav-item").forEach((button) => {
     const feature = viewCapabilities[button.dataset.view];
+    const requiresExplicitCapability = feature === "deployment_plan";
     const unsupported = Boolean(
       feature &&
-      capability?.known &&
-      (capability.compatible === false || !(capability.capabilities || []).includes(feature))
+      (
+        (requiresExplicitCapability && !capability?.known) ||
+        (capability?.known &&
+          (capability.compatible === false || !(capability.capabilities || []).includes(feature)))
+      )
     );
     button.disabled = unsupported;
     button.classList.toggle("unsupported", unsupported);
     button.title = unsupported
-      ? (capability?.compatible === false
-          ? "当前 CLI API v" + (capability.api_version || 0) + " 高于 Desktop 支持的 v1"
-          : "当前 CLI 未声明能力：" + feature)
+      ? (!capability?.known && requiresExplicitCapability
+          ? "当前 CLI 版本不支持部署向导，请先升级服务器 CLI"
+          : (capability?.compatible === false
+              ? "当前 CLI API v" + (capability.api_version || 0) + " 高于 Desktop 支持的 v1"
+              : "当前 CLI 未声明能力：" + feature))
       : "";
   });
 
@@ -151,6 +160,7 @@ async function refresh() {
     if (state.view === "snapshots") await loadSnapshots();
     if (state.view === "certificates") await loadCertificates();
     if (state.view === "logs") await loadLogs();
+    if (state.view === "deployment") await loadDeploymentPlan();
     if (state.view === "diagnostics") await loadDiagnostics();
   } else {
     clearEditor(false);
@@ -219,6 +229,7 @@ function renderConnections() {
       if (state.view === "snapshots") await loadSnapshots();
       if (state.view === "certificates") await loadCertificates();
       if (state.view === "logs") await loadLogs();
+      if (state.view === "deployment") await loadDeploymentPlan();
       if (state.view === "diagnostics") await loadDiagnostics();
     };
     root.appendChild(button);
@@ -247,6 +258,7 @@ function clearEditor(resetSelection = true) {
   resetStatus();
   resetOverview();
   resetDiagnostics();
+  resetDeploymentPlan();
   resetProxyEditor();
   updateHeader();
   applyCapabilityUI();
@@ -277,6 +289,9 @@ function updateHeader() {
   } else if (state.view === "logs") {
     $("pageTitle").textContent = item ? item.name + " · 日志" : "访问与错误日志";
     $("pageSubtitle").textContent = "安全读取当前 Nginx / OpenResty 的日志尾部内容。";
+  } else if (state.view === "deployment") {
+    $("pageTitle").textContent = item ? item.name + " · 部署向导" : "部署向导";
+    $("pageSubtitle").textContent = "按 CLI 实际状态生成部署步骤；Desktop 只复制命令，不远程执行 sudo。";
   } else if (state.view === "diagnostics") {
     $("pageTitle").textContent = item ? item.name + " · 系统诊断" : "系统诊断";
     $("pageSubtitle").textContent = "检查 systemd 服务、运行时、Certbot 和自动续期配置。";
@@ -296,6 +311,7 @@ function activateView(view) {
   $("snapshotsView").classList.toggle("hidden", view !== "snapshots");
   $("certificatesView").classList.toggle("hidden", view !== "certificates");
   $("logsView").classList.toggle("hidden", view !== "logs");
+  $("deploymentView").classList.toggle("hidden", view !== "deployment");
   $("diagnosticsView").classList.toggle("hidden", view !== "diagnostics");
   updateHeader();
 }
@@ -312,6 +328,7 @@ function setView(view) {
   if (view === "sites") loadSites();
   if (view === "snapshots") loadSnapshots();
   if (view === "certificates") loadCertificates();
+  if (view === "deployment") loadDeploymentPlan();
   if (view === "diagnostics") loadDiagnostics();
   if (view === "logs") {
     loadLogs();
@@ -451,6 +468,7 @@ $("deleteBtn").onclick = async () => {
   state.logTail = null;
   state.overview = null;
   state.diagnostics = null;
+  state.deploymentPlan = null;
   state.pendingLogSite = "";
   state.pendingLogPath = "";
   state.pendingCertificateSiteID = "";
@@ -660,6 +678,157 @@ function formatOverviewExpiry(value) {
   return days + " 天 · " + date.toLocaleDateString("zh-CN");
 }
 
+$("refreshDeploymentBtn").onclick = loadDeploymentPlan;
+
+async function loadDeploymentPlan() {
+  if (!state.selected) {
+    resetDeploymentPlan();
+    $("deploymentMessage").textContent = "请先选择一个 CLI 连接。";
+    return;
+  }
+
+  $("deploymentSteps").innerHTML = '<div class="empty large">正在生成部署计划…</div>';
+  $("deploymentMessage").textContent = "正在根据 CLI 当前状态生成部署步骤…";
+  try {
+    const plan = await api().LoadDeploymentPlan(state.selected);
+    state.deploymentPlan = plan;
+    renderDeploymentPlan(plan);
+  } catch (err) {
+    state.deploymentPlan = null;
+    resetDeploymentPlan(false);
+    $("deploymentMessage").textContent = cleanError(err);
+  }
+}
+
+function renderDeploymentPlan(plan) {
+  const root = $("deploymentSteps");
+  root.innerHTML = "";
+
+  if (!plan) {
+    root.innerHTML = '<div class="empty large">尚未生成部署计划</div>';
+    $("deploymentRequired").textContent = "—";
+    $("deploymentTotal").textContent = "—";
+    $("deploymentStatus").textContent = "—";
+    $("deploymentVerify").textContent = "尚未生成验证命令。";
+    return;
+  }
+
+  $("deploymentRequired").textContent =
+    (plan.required_ready || 0) + " / " + (plan.required_total || 0);
+  $("deploymentTotal").textContent =
+    (plan.completed || 0) + " / " + (plan.total || 0);
+  $("deploymentStatus").textContent = plan.ready ? "核心就绪" : "待处理";
+  $("deploymentVerify").textContent = plan.verify_command || "尚未生成验证命令。";
+
+  const steps = plan.steps || [];
+  if (!steps.length) {
+    root.innerHTML = '<div class="empty large">CLI 没有返回部署步骤</div>';
+  }
+
+  for (const [index, step] of steps.entries()) {
+    const row = document.createElement("article");
+    row.className =
+      "deployment-step " +
+      (step.complete ? "ok" : (step.required ? "bad" : "warn"));
+
+    const head = document.createElement("div");
+    head.className = "deployment-step-head";
+
+    const stateLabel = document.createElement("span");
+    stateLabel.className = "deployment-step-state";
+    stateLabel.textContent = step.complete ? "✓" : String(index + 1);
+
+    const main = document.createElement("div");
+    main.className = "deployment-step-main";
+    const title = document.createElement("strong");
+    title.textContent = step.title || step.id || "部署步骤";
+    const detail = document.createElement("span");
+    detail.textContent = step.detail || (step.complete ? "已完成" : "等待处理");
+    main.appendChild(title);
+    main.appendChild(detail);
+
+    const kind = document.createElement("span");
+    kind.className = "deployment-step-kind";
+    kind.textContent = step.complete ? "已完成" : (step.required ? "核心" : "可选");
+
+    head.appendChild(stateLabel);
+    head.appendChild(main);
+    head.appendChild(kind);
+    row.appendChild(head);
+
+    const commands = step.commands || [];
+    if (!step.complete && commands.length) {
+      const commandBlock = document.createElement("pre");
+      commandBlock.className = "deployment-step-commands";
+      commandBlock.textContent = commands.join("\n");
+      row.appendChild(commandBlock);
+
+      const actions = document.createElement("div");
+      actions.className = "deployment-step-actions";
+      const copy = document.createElement("button");
+      copy.textContent = "复制此步骤";
+      copy.onclick = () => copyDeploymentText(
+        "# " + (step.title || step.id || "部署步骤") + "\n" + commands.join("\n"),
+        "已复制：" + (step.title || step.id || "部署步骤")
+      );
+      actions.appendChild(copy);
+      row.appendChild(actions);
+    }
+
+    root.appendChild(row);
+  }
+
+  const missingCore = Math.max(0, (plan.required_total || 0) - (plan.required_ready || 0));
+  $("deploymentMessage").textContent = plan.ready
+    ? "核心部署链路已就绪。可继续完成可选运维能力，然后运行 doctor 做最终验证。"
+    : "还有 " + missingCore + " 个核心步骤未完成。执行对应命令后点击“重新检查”。";
+}
+
+function incompleteDeploymentCommands(plan) {
+  const sections = [];
+  for (const step of plan?.steps || []) {
+    if (step.complete || !(step.commands || []).length) continue;
+    sections.push("# " + (step.title || step.id || "部署步骤") + "\n" + step.commands.join("\n"));
+  }
+  return sections.join("\n\n");
+}
+
+async function copyDeploymentText(content, successMessage) {
+  if (!String(content || "").trim()) {
+    $("deploymentMessage").textContent = "当前没有可复制的部署命令。";
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(content);
+    $("deploymentMessage").textContent = successMessage;
+  } catch (err) {
+    $("deploymentMessage").textContent = "复制失败：" + cleanError(err);
+  }
+}
+
+$("copyDeploymentAllBtn").onclick = () => {
+  copyDeploymentText(
+    incompleteDeploymentCommands(state.deploymentPlan),
+    "所有未完成步骤命令已复制。"
+  );
+};
+
+$("copyDeploymentVerifyBtn").onclick = () => {
+  copyDeploymentText(
+    state.deploymentPlan?.verify_command || "",
+    "doctor 验证命令已复制。"
+  );
+};
+
+function resetDeploymentPlan(clearState = true) {
+  if (clearState) state.deploymentPlan = null;
+  $("deploymentRequired").textContent = "—";
+  $("deploymentTotal").textContent = "—";
+  $("deploymentStatus").textContent = "—";
+  $("deploymentSteps").innerHTML = '<div class="empty large">尚未生成部署计划</div>';
+  $("deploymentVerify").textContent = "尚未生成验证命令。";
+}
+
 $("refreshDiagnosticsBtn").onclick = loadDiagnostics;
 
 async function loadDiagnostics() {
@@ -703,6 +872,10 @@ async function loadDiagnostics() {
       : "未声明";
 
     $("diagManagerExecutable").textContent = result.executable || "—";
+    $("diagProcessUser").textContent = result.process?.username
+      ? result.process.username + (result.process.uid ? " · uid " + result.process.uid : "")
+      : "旧版 CLI 未提供";
+    $("diagProcessConfig").textContent = result.process?.config_path || "旧版 CLI 未提供";
     $("diagRuntimeKind").textContent =
       (result.runtime?.kind || "—") + (result.runtime?.version ? " · " + result.runtime.version : "");
     $("diagRuntimePath").textContent = result.runtime?.path || "—";
@@ -717,8 +890,6 @@ async function loadDiagnostics() {
       result.paths_config?.site_log_dir || "/var/log/nginx/nginx-manager";
     $("diagSnapshotDir").textContent =
       result.paths_config?.snapshot_dir || "/var/lib/nginx-manager/snapshots";
-    renderReadiness(result, connection);
-    renderDeploymentCommands(result, connection);
 
     const notes = [];
     if (!result.services?.systemd_available) {
@@ -763,7 +934,6 @@ async function loadDiagnostics() {
   } catch (err) {
     state.diagnostics = null;
     resetDiagnostics();
-    renderReadiness(null, null);
     $("diagnosticsMessage").textContent = cleanError(err);
   }
 }
@@ -777,156 +947,10 @@ function formatServiceUnit(unit, systemdAvailable) {
   return states.join(" · ");
 }
 
-function renderReadiness(result, connection) {
-  const root = $("readinessList");
-  root.innerHTML = "";
-
-  if (!result || !connection) {
-    root.innerHTML = '<div class="empty large">尚未运行部署就绪检查</div>';
-    return;
-  }
-
-  const items = [
-    {
-      label: "CLI 连接与认证",
-      ok: Boolean(connection.ok),
-      required: true,
-      detail: connection.ok ? "API 可访问，管理密码有效" : (connection.message || "连接失败")
-    },
-    {
-      label: "受限 root helper + nginx -t",
-      ok: Boolean(connection.privilege_ready),
-      required: true,
-      detail: connection.privilege_message || "未就绪"
-    },
-    {
-      label: "可信路径配置",
-      ok: Boolean(result.paths_configured),
-      required: true,
-      detail: result.paths_configured
-        ? (result.paths_config_path || "/etc/nginx-manager/paths.json")
-        : "未安装；当前使用默认/兼容 fallback"
-    },
-    {
-      label: "nginx-manager systemd 托管",
-      ok: Boolean(result.services?.manager?.active),
-      required: false,
-      detail: formatServiceUnit(result.services?.manager, result.services?.systemd_available)
-    },
-    {
-      label: "Nginx / OpenResty 服务",
-      ok: Boolean(result.services?.runtime?.active),
-      required: false,
-      detail: formatServiceUnit(result.services?.runtime, result.services?.systemd_available)
-    },
-    {
-      label: "Certbot",
-      ok: Boolean(result.certbot?.available),
-      required: false,
-      detail: result.certbot?.available ? (result.certbot.version || "已安装") : "HTTPS ACME 功能不可用"
-    },
-    {
-      label: "自动证书续期",
-      ok: Boolean(result.renewal_timer?.active && result.renewal_timer?.enabled),
-      required: false,
-      detail: formatRenewalTimerStatus(result.renewal_timer)
-    }
-  ];
-
-  for (const item of items) {
-    const row = document.createElement("div");
-    row.className = "readiness-row " + (item.ok ? "ok" : (item.required ? "bad" : "warn"));
-    row.innerHTML =
-      '<span class="readiness-state">' + (item.ok ? "✓" : (item.required ? "!" : "·")) + '</span>' +
-      '<div class="readiness-main">' +
-        '<strong>' + escapeHtml(item.label) + '</strong>' +
-        '<span>' + escapeHtml(item.detail) + '</span>' +
-      '</div>' +
-      '<span class="readiness-kind">' + (item.required ? "核心" : "可选") + '</span>';
-    root.appendChild(row);
-  }
-}
-
-function shellQuote(value) {
-  return "'" + String(value || "").replace(/'/g, "'\"'\"'") + "'";
-}
-
-function renderDeploymentCommands(result, connection) {
-  const target = $("deploymentCommands");
-  if (!result || !connection) {
-    target.textContent = "运行诊断后生成部署辅助命令。";
-    return;
-  }
-
-  const executable = result.executable || "/usr/local/bin/nginx-manager";
-  const q = shellQuote(executable);
-  const commands = [];
-
-  if (!connection.privilege_ready) {
-    commands.push(
-      "# 安装 / 修复最小 sudoers",
-      q + " privileged sudoers --service-user nginx-manager --helper " + q + " | sudo tee /tmp/nginx-manager.sudoers >/dev/null",
-      "sudo visudo -cf /tmp/nginx-manager.sudoers",
-      "sudo install -o root -g root -m 0440 /tmp/nginx-manager.sudoers /etc/sudoers.d/nginx-manager",
-      "sudo rm -f /tmp/nginx-manager.sudoers",
-      ""
-    );
-  }
-
-  if (!result.paths_configured) {
-    commands.push(
-      "# 安装可信路径配置",
-      "sudo install -d -o root -g root -m 0755 /etc/nginx-manager",
-      q + " config paths-template | sudo tee /etc/nginx-manager/paths.json >/dev/null",
-      "sudo chown root:root /etc/nginx-manager/paths.json",
-      "sudo chmod 0644 /etc/nginx-manager/paths.json",
-      ""
-    );
-  }
-
-  const managerUnit = result.services?.manager;
-  if (!managerUnit?.installed || !managerUnit?.active || !managerUnit?.enabled) {
-    commands.push(
-      "# 安装 / 修复 nginx-manager.service",
-      q + " service systemd --service-user nginx-manager --binary " + q + " --listen 127.0.0.1:8020 | sudo tee /etc/systemd/system/nginx-manager.service >/dev/null",
-      "sudo systemctl daemon-reload",
-      "sudo systemctl enable --now nginx-manager.service",
-      ""
-    );
-  }
-
-  if (result.certbot?.available &&
-      (!result.renewal_timer?.installed || !result.renewal_timer?.enabled || !result.renewal_timer?.active)) {
-    commands.push(
-      "# 安装 / 修复自动证书续期",
-      q + " service renewal-service --binary " + q + " | sudo tee /etc/systemd/system/nginx-manager-renew.service >/dev/null",
-      q + " service renewal-timer | sudo tee /etc/systemd/system/nginx-manager-renew.timer >/dev/null",
-      "sudo systemctl daemon-reload",
-      "sudo systemctl enable --now nginx-manager-renew.timer",
-      ""
-    );
-  }
-
-  if (!commands.length) {
-    target.textContent = "# 当前没有需要生成的部署修复命令。";
-    return;
-  }
-  target.textContent = commands.join("\n").trim();
-}
-
-$("copyDeploymentCommandsBtn").onclick = async () => {
-  const content = $("deploymentCommands").textContent || "";
-  if (!content || content.startsWith("运行诊断后")) return;
-  try {
-    await navigator.clipboard.writeText(content);
-    $("diagnosticsMessage").textContent = "部署辅助命令已复制。";
-  } catch (err) {
-    $("diagnosticsMessage").textContent = "复制失败：" + cleanError(err);
-  }
-};
-
 function resetDiagnostics() {
   $("diagManagerExecutable").textContent = "—";
+  $("diagProcessUser").textContent = "—";
+  $("diagProcessConfig").textContent = "—";
   $("diagManagerService").textContent = "—";
   $("diagRuntimeService").textContent = "—";
   $("diagCertbot").textContent = "—";
@@ -942,8 +966,6 @@ function resetDiagnostics() {
   $("diagPathsConfig").textContent = "—";
   $("diagSiteLogDir").textContent = "—";
   $("diagSnapshotDir").textContent = "—";
-  renderReadiness(null, null);
-  renderDeploymentCommands(null, null);
 }
 
 $("checkAllUpstreamsBtn").onclick = async () => {
