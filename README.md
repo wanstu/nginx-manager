@@ -168,6 +168,7 @@ wails dev
 
 Desktop 当前能：
 
+- 跨服务器只读总览：最多 4 台并发读取全部已保存 CLI 的连接、站点、HTTPS、证书与运维状态；单台失败不会中断整批，也不会读取日志正文或执行批量写操作；
 - 保存多个 CLI 连接；
 - 对每个 CLI 进行 API 版本 / 能力协商；明确缺失能力时禁用对应页面，旧版 CLI 自动进入兼容模式；
 - 切换当前连接，并一键检查全部 CLI 的可达性 / 管理权限状态；
@@ -196,4 +197,4 @@ Desktop 当前能：
 - 系统诊断页只读展示 nginx-manager.service、Nginx/OpenResty service、Certbot、renewal timer、运行时布局和可信路径配置；
 - 部署向导按服务用户、密码归属、可信路径、最小 sudoers、systemd、Certbot/续期和 doctor 验证逐步检查，每一步只生成可复制命令，Desktop 不远程执行 root 安装操作。
 
-下一阶段：更长期的流量统计与跨服务器批量运维。
+下一阶段：更长期的流量统计，以及建立在只读 Fleet 总览之上的受控批量运维。

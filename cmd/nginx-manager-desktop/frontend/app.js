@@ -15,6 +15,7 @@ const state = {
   logTail: null,
   logAutoTimer: null,
   overview: null,
+  fleetOverview: null,
   diagnostics: null,
   deploymentPlan: null,
   pendingLogSite: "",
@@ -152,6 +153,8 @@ async function refresh() {
   renderConnections();
   applyCapabilityUI();
 
+  if (state.view === "fleet") await loadFleetOverview();
+
   if (state.selected) {
     loadEditor(state.selected);
     await loadCapabilities(state.selected);
@@ -277,7 +280,10 @@ function resetStatus() {
 
 function updateHeader() {
   const item = state.items.find((x) => x.id === state.selected);
-  if (state.view === "sites") {
+  if (state.view === "fleet") {
+    $("pageTitle").textContent = "服务器总览";
+    $("pageSubtitle").textContent = "只读聚合所有 CLI 的连接、站点、HTTPS、证书与运维状态。";
+  } else if (state.view === "sites") {
     $("pageTitle").textContent = item ? item.name + " · 站点" : "站点";
     $("pageSubtitle").textContent = "读取和管理当前 CLI 所在服务器的 Nginx / OpenResty 站点。";
   } else if (state.view === "snapshots") {
@@ -306,6 +312,7 @@ function activateView(view) {
   document.querySelectorAll(".nav-item").forEach((item) => {
     item.classList.toggle("active", item.dataset.view === view);
   });
+  $("fleetView").classList.toggle("hidden", view !== "fleet");
   $("overviewView").classList.toggle("hidden", view !== "overview");
   $("sitesView").classList.toggle("hidden", view !== "sites");
   $("snapshotsView").classList.toggle("hidden", view !== "snapshots");
@@ -324,6 +331,7 @@ function setView(view) {
   }
 
   activateView(view);
+  if (view === "fleet") loadFleetOverview();
   if (view === "overview") loadOverview();
   if (view === "sites") loadSites();
   if (view === "snapshots") loadSnapshots();
@@ -467,6 +475,7 @@ $("deleteBtn").onclick = async () => {
   state.logs = [];
   state.logTail = null;
   state.overview = null;
+  state.fleetOverview = null;
   state.diagnostics = null;
   state.deploymentPlan = null;
   state.pendingLogSite = "";
@@ -474,6 +483,165 @@ $("deleteBtn").onclick = async () => {
   state.pendingCertificateSiteID = "";
   await refresh();
 };
+
+$("refreshFleetBtn").onclick = loadFleetOverview;
+
+async function loadFleetOverview() {
+  const button = $("refreshFleetBtn");
+  button.disabled = true;
+  $("fleetMessage").textContent = "正在并发读取全部 CLI 的轻量状态…";
+  $("fleetServers").innerHTML = '<div class="empty large">正在读取服务器状态…</div>';
+  try {
+    const result = await api().LoadFleetOverview();
+    state.fleetOverview = result;
+    renderFleetOverview(result);
+  } catch (err) {
+    state.fleetOverview = null;
+    resetFleetOverview(false);
+    $("fleetMessage").textContent = cleanError(err);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderFleetOverview(result) {
+  $("fleetTotal").textContent = String(result?.total || 0);
+  $("fleetHealthy").textContent = String(result?.healthy || 0);
+  $("fleetAttention").textContent = String(result?.attention || 0);
+  $("fleetUnreachable").textContent = String(result?.unreachable || 0);
+  $("fleetSites").textContent =
+    (result?.total_sites || 0) + " / " + (result?.https_sites || 0);
+
+  const riskCount =
+    (result?.certificates_expired || 0) +
+    (result?.certificates_expiring || 0) +
+    (result?.https_without_certificate || 0);
+  $("fleetCertificates").textContent = riskCount
+    ? "过期 " + (result.certificates_expired || 0) +
+      " · 临期 " + (result.certificates_expiring || 0) +
+      " · 缺失 " + (result.https_without_certificate || 0)
+    : "无";
+
+  const root = $("fleetServers");
+  root.innerHTML = "";
+  const servers = result?.servers || [];
+  if (!servers.length) {
+    root.innerHTML = '<div class="empty large">还没有已保存的 CLI 连接</div>';
+    $("fleetMessage").textContent = "先添加至少一个 CLI 连接，再查看跨服务器总览。";
+    return;
+  }
+
+  for (const server of servers) {
+    const row = document.createElement("article");
+    row.className = "fleet-server-row " + (server.status || "unreachable");
+
+    const main = document.createElement("div");
+    main.className = "fleet-server-main";
+    const head = document.createElement("div");
+    head.className = "fleet-server-head";
+    const name = document.createElement("strong");
+    name.textContent = server.name || server.hostname || server.url || "未命名服务器";
+    const badge = document.createElement("span");
+    badge.className = "mini-badge " + fleetStatusClass(server.status);
+    badge.textContent = fleetStatusText(server.status);
+    head.appendChild(name);
+    head.appendChild(badge);
+    main.appendChild(head);
+
+    const meta = document.createElement("div");
+    meta.className = "fleet-server-meta";
+    const metaParts = [];
+    if (server.hostname) metaParts.push(server.hostname);
+    if (server.runtime) metaParts.push(server.runtime);
+    if (server.cli_version) metaParts.push("CLI " + server.cli_version);
+    metaParts.push(server.url || "");
+    meta.textContent = metaParts.filter(Boolean).join(" · ");
+    main.appendChild(meta);
+
+    const stats = document.createElement("div");
+    stats.className = "fleet-server-stats";
+    const statParts = [];
+    if (server.reachable) {
+      statParts.push("站点 " + (server.total_sites || 0));
+      statParts.push("Manager " + (server.managed_sites || 0));
+      statParts.push("HTTPS " + (server.https_sites || 0));
+      statParts.push("证书 " + (server.certificates || 0));
+      if (server.manager_service_installed) {
+        statParts.push("服务 " + (server.manager_service_active && server.manager_service_enabled ? "active" : "需检查"));
+      }
+    }
+    stats.textContent = statParts.join(" · ");
+    main.appendChild(stats);
+
+    const notes = [];
+    if (server.error) notes.push(server.error);
+    notes.push(...(server.issues || []));
+    notes.push(...(server.warnings || []));
+    if (notes.length) {
+      const note = document.createElement("div");
+      note.className = "fleet-server-note";
+      note.textContent = notes.slice(0, 3).join("；") + (notes.length > 3 ? "；…" : "");
+      main.appendChild(note);
+    }
+
+    const side = document.createElement("div");
+    side.className = "fleet-server-side";
+    const open = document.createElement("button");
+    open.textContent = "打开总览";
+    open.disabled = !server.reachable;
+    open.onclick = () => openFleetServer(server.id);
+    side.appendChild(open);
+
+    row.appendChild(main);
+    row.appendChild(side);
+    root.appendChild(row);
+  }
+
+  const problemCount = (result.attention || 0) + (result.unreachable || 0);
+  $("fleetMessage").textContent = problemCount
+    ? "已检查 " + result.total + " 台服务器，其中 " + problemCount + " 台需要关注。"
+    : "已检查 " + result.total + " 台服务器，当前未发现需要关注的状态。";
+}
+
+function fleetStatusText(status) {
+  if (status === "healthy") return "正常";
+  if (status === "attention") return "需关注";
+  return "不可达";
+}
+
+function fleetStatusClass(status) {
+  if (status === "healthy") return "ok";
+  if (status === "attention") return "warn";
+  return "bad";
+}
+
+async function openFleetServer(id) {
+  const item = state.items.find((connection) => connection.id === id);
+  if (!item) return;
+  state.selected = id;
+  state.upstreamHealth = {};
+  await api().SelectConnection(id);
+  renderConnections();
+  loadEditor(id);
+  await loadCapabilities(id);
+  resetProxyEditor();
+  state.pendingLogSite = "";
+  state.pendingLogPath = "";
+  state.pendingCertificateSiteID = "";
+  activateView("overview");
+  await loadOverview();
+}
+
+function resetFleetOverview(clearState = true) {
+  if (clearState) state.fleetOverview = null;
+  $("fleetTotal").textContent = "—";
+  $("fleetHealthy").textContent = "—";
+  $("fleetAttention").textContent = "—";
+  $("fleetUnreachable").textContent = "—";
+  $("fleetSites").textContent = "—";
+  $("fleetCertificates").textContent = "—";
+  $("fleetServers").innerHTML = '<div class="empty large">尚未读取服务器状态</div>';
+}
 
 $("refreshOverviewBtn").onclick = loadOverview;
 $("overviewTrafficWindow").onchange = loadOverview;

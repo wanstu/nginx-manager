@@ -379,6 +379,48 @@ type ServerOverview struct {
 	Warnings                []string                 `json:"warnings"`
 }
 
+type FleetServerOverview struct {
+	ID                      string                   `json:"id"`
+	Name                    string                   `json:"name"`
+	URL                     string                   `json:"url"`
+	Status                  string                   `json:"status"`
+	Reachable               bool                     `json:"reachable"`
+	Error                   string                   `json:"error,omitempty"`
+	Hostname                string                   `json:"hostname,omitempty"`
+	CLIVersion              string                   `json:"cli_version,omitempty"`
+	Runtime                 string                   `json:"runtime,omitempty"`
+	APIVersion              int                      `json:"api_version,omitempty"`
+	APICompatible           bool                     `json:"api_compatible"`
+	PrivilegeReady          bool                     `json:"privilege_ready"`
+	ManagerServiceInstalled bool                     `json:"manager_service_installed"`
+	ManagerServiceEnabled   bool                     `json:"manager_service_enabled"`
+	ManagerServiceActive    bool                     `json:"manager_service_active"`
+	TotalSites              int                      `json:"total_sites"`
+	ManagedSites            int                      `json:"managed_sites"`
+	EnabledSites            int                      `json:"enabled_sites"`
+	HTTPSSites              int                      `json:"https_sites"`
+	Certificates            int                      `json:"certificates"`
+	CertificatesExpiring    int                      `json:"certificates_expiring"`
+	CertificatesExpired     int                      `json:"certificates_expired"`
+	HTTPSWithoutCertificate int                      `json:"https_without_certificate"`
+	RenewalTimer            RemoteRenewalTimerStatus `json:"renewal_timer"`
+	Issues                  []string                 `json:"issues"`
+	Warnings                []string                 `json:"warnings"`
+}
+
+type FleetOverview struct {
+	Servers                 []FleetServerOverview `json:"servers"`
+	Total                   int                   `json:"total"`
+	Healthy                 int                   `json:"healthy"`
+	Attention               int                   `json:"attention"`
+	Unreachable             int                   `json:"unreachable"`
+	TotalSites              int                   `json:"total_sites"`
+	HTTPSSites              int                   `json:"https_sites"`
+	CertificatesExpired     int                   `json:"certificates_expired"`
+	CertificatesExpiring    int                   `json:"certificates_expiring"`
+	HTTPSWithoutCertificate int                   `json:"https_without_certificate"`
+}
+
 type App struct {
 	settings *jsonstore.Store[Settings]
 	secure   *secureconfig.Store
@@ -711,6 +753,211 @@ func (a *App) LoadCapabilities(id string) (CapabilityResult, error) {
 		Compatible:   apiVersionCompatible(payload.APIVersion),
 		Capabilities: payload.Capabilities,
 	}, nil
+}
+
+func (a *App) LoadFleetOverview() (FleetOverview, error) {
+	connections, err := a.ListConnections()
+	if err != nil {
+		return FleetOverview{}, err
+	}
+	servers := make([]FleetServerOverview, len(connections))
+	if len(connections) == 0 {
+		return aggregateFleetServers(servers), nil
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for i, connection := range connections {
+		i, connection := i, connection
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			servers[i] = a.loadFleetServer(connection)
+		}()
+	}
+	wg.Wait()
+	return aggregateFleetServers(servers), nil
+}
+
+func (a *App) loadFleetServer(connection Connection) FleetServerOverview {
+	result := FleetServerOverview{
+		ID:            connection.ID,
+		Name:          connection.Name,
+		URL:           connection.URL,
+		Status:        "unreachable",
+		APICompatible: true,
+		Issues:        []string{},
+		Warnings:      []string{},
+	}
+
+	test, err := a.TestConnection(connection.ID)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	if !test.OK {
+		result.Error = strings.TrimSpace(test.Message)
+		if result.Error == "" {
+			result.Error = "连接失败"
+		}
+		return result
+	}
+
+	result.Reachable = true
+	result.Hostname = test.Hostname
+	result.CLIVersion = test.Version
+	result.Runtime = test.Runtime
+	result.APIVersion = test.APIVersion
+	result.APICompatible = test.APICompatible
+	result.PrivilegeReady = test.PrivilegeReady
+	if !test.APICompatible {
+		result.Issues = append(result.Issues, fmt.Sprintf("CLI API v%d 高于 Desktop 支持的 v%d", test.APIVersion, desktopSupportedAPIVersion))
+	}
+	if !test.PrivilegeReady {
+		message := strings.TrimSpace(test.PrivilegeMessage)
+		if message == "" {
+			message = "受限 root helper 未就绪"
+		}
+		result.Issues = append(result.Issues, message)
+	}
+
+	if fleetCapabilitySupported(test, "diagnostics") {
+		if diagnostics, diagnosticsErr := a.LoadDiagnostics(connection.ID); diagnosticsErr != nil {
+			result.Warnings = append(result.Warnings, "系统诊断读取失败："+diagnosticsErr.Error())
+		} else {
+			result.ManagerServiceInstalled = diagnostics.Services.Manager.Installed
+			result.ManagerServiceEnabled = diagnostics.Services.Manager.Enabled
+			result.ManagerServiceActive = diagnostics.Services.Manager.Active
+			result.RenewalTimer = diagnostics.RenewalTimer
+			if diagnostics.Services.Manager.Installed && (!diagnostics.Services.Manager.Enabled || !diagnostics.Services.Manager.Active) {
+				result.Warnings = append(result.Warnings, "nginx-manager.service 已安装但未正常 enabled + active")
+			}
+		}
+	}
+
+	var sites []RemoteSite
+	if fleetCapabilitySupported(test, "sites_read") {
+		if siteResult, siteErr := a.ListSites(connection.ID); siteErr != nil {
+			result.Issues = append(result.Issues, "站点读取失败："+siteErr.Error())
+		} else {
+			sites = siteResult.Sites
+			result.TotalSites = len(sites)
+			for _, site := range sites {
+				if site.Managed {
+					result.ManagedSites++
+				}
+				if site.Enabled {
+					result.EnabledSites++
+				}
+				if site.HTTPS {
+					result.HTTPSSites++
+				}
+			}
+		}
+	}
+
+	if fleetCapabilitySupported(test, "https_acme") {
+		if certificates, certificatesErr := a.ListCertificates(connection.ID); certificatesErr != nil {
+			result.Warnings = append(result.Warnings, "证书读取失败："+certificatesErr.Error())
+		} else {
+			applyFleetCertificateHealth(&result, sites, certificates, time.Now())
+		}
+	}
+
+	if len(result.Issues) > 0 || len(result.Warnings) > 0 {
+		result.Status = "attention"
+	} else {
+		result.Status = "healthy"
+	}
+	return result
+}
+
+func fleetCapabilitySupported(test TestResult, feature string) bool {
+	if !test.CapabilitiesKnown {
+		return true
+	}
+	if !test.APICompatible {
+		return false
+	}
+	for _, capability := range test.Capabilities {
+		if capability == feature {
+			return true
+		}
+	}
+	return false
+}
+
+func applyFleetCertificateHealth(result *FleetServerOverview, sites []RemoteSite, certificates CertificateListResult, now time.Time) {
+	result.Certificates = len(certificates.Certificates)
+	result.RenewalTimer = certificates.RenewalTimer
+	for _, certificate := range certificates.Certificates {
+		expires, err := time.Parse(time.RFC3339, certificate.NotAfter)
+		if err != nil {
+			expires, err = time.Parse(time.RFC3339Nano, certificate.NotAfter)
+		}
+		if err != nil {
+			continue
+		}
+		if expires.Before(now) {
+			result.CertificatesExpired++
+		} else if expires.Before(now.Add(30 * 24 * time.Hour)) {
+			result.CertificatesExpiring++
+		}
+	}
+
+	for _, site := range sites {
+		if !site.HTTPS || strings.TrimSpace(site.ServerName) == "" || site.ServerName == "_" {
+			continue
+		}
+		covered := false
+		for _, certificate := range certificates.Certificates {
+			if certificateCoversHost(certificate, site.ServerName) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			result.HTTPSWithoutCertificate++
+		}
+	}
+
+	if result.CertificatesExpired > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("%d 张证书已过期", result.CertificatesExpired))
+	}
+	if result.CertificatesExpiring > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("%d 张证书将在 30 天内到期", result.CertificatesExpiring))
+	}
+	if result.HTTPSWithoutCertificate > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("%d 个 HTTPS 站点未找到匹配证书", result.HTTPSWithoutCertificate))
+	}
+	if result.Certificates > 0 && !certificates.Certbot.Available {
+		result.Warnings = append(result.Warnings, "服务器存在证书，但 Certbot 当前不可用")
+	}
+	if result.Certificates > 0 && (!certificates.RenewalTimer.Enabled || !certificates.RenewalTimer.Active) {
+		result.Warnings = append(result.Warnings, "服务器存在证书，但自动续期 Timer 未正常运行")
+	}
+}
+
+func aggregateFleetServers(servers []FleetServerOverview) FleetOverview {
+	result := FleetOverview{Servers: servers, Total: len(servers)}
+	for _, server := range servers {
+		switch server.Status {
+		case "healthy":
+			result.Healthy++
+		case "attention":
+			result.Attention++
+		default:
+			result.Unreachable++
+		}
+		result.TotalSites += server.TotalSites
+		result.HTTPSSites += server.HTTPSSites
+		result.CertificatesExpired += server.CertificatesExpired
+		result.CertificatesExpiring += server.CertificatesExpiring
+		result.HTTPSWithoutCertificate += server.HTTPSWithoutCertificate
+	}
+	return result
 }
 
 func (a *App) LoadOverview(id string) (ServerOverview, error) {

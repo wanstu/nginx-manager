@@ -19,6 +19,7 @@
       <div id="connections" class="connections"></div>
 
       <nav class="side-nav">
+        <button class="nav-item" data-view="fleet">服务器总览</button>
         <button class="nav-item active" data-view="overview">总览与连接</button>
         <button class="nav-item" data-view="sites">站点与反向代理</button>
         <button class="nav-item" data-view="snapshots">快照与恢复</button>
@@ -41,6 +42,39 @@
         </div>
         <div id="statusBadge" class="badge">未连接</div>
       </header>
+
+      <div id="fleetView" class="view hidden">
+        <section class="card">
+          <div class="section-title inline">
+            <div>
+              <h2>服务器总览</h2>
+              <p>并发读取所有已保存 CLI 的轻量状态；不读取日志正文，也不执行任何跨服务器写操作。</p>
+            </div>
+            <button id="refreshFleetBtn">刷新全部</button>
+          </div>
+          <div class="fleet-summary">
+            <div><span>服务器</span><strong id="fleetTotal">—</strong></div>
+            <div><span>正常</span><strong id="fleetHealthy">—</strong></div>
+            <div><span>需关注</span><strong id="fleetAttention">—</strong></div>
+            <div><span>不可达</span><strong id="fleetUnreachable">—</strong></div>
+            <div><span>站点 / HTTPS</span><strong id="fleetSites">—</strong></div>
+            <div><span>证书风险</span><strong id="fleetCertificates">—</strong></div>
+          </div>
+          <pre id="fleetMessage">进入此页面后读取全部服务器状态。</pre>
+        </section>
+
+        <section class="card">
+          <div class="section-title">
+            <div>
+              <h2>服务器</h2>
+              <p>单台失败不会中断其他服务器；点击“打开总览”进入现有单服务器管理页面。</p>
+            </div>
+          </div>
+          <div id="fleetServers" class="fleet-server-list">
+            <div class="empty large">尚未读取服务器状态</div>
+          </div>
+        </section>
+      </div>
 
       <div id="overviewView" class="view">
         <section class="card">
