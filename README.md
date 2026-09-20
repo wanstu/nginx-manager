@@ -11,6 +11,16 @@
 - Linux 上 HTTP API 拒绝以 root 身份运行；写配置通过固定的 `privileged apply` 入口最小提权。
 - 远程 Endpoint 必须使用 HTTPS；HTTP 仅允许 localhost / loopback，适合 SSH Tunnel。
 
+## Release 资产
+
+正式 tag（`v*`）会在同一个 GitHub Release 中发布：
+
+- CLI：Windows amd64、Linux amd64、macOS amd64 / arm64；
+- Desktop：Windows amd64、Linux amd64（raw / deb / tar.gz）、macOS universal；
+- 每个二进制/安装包对应的 SHA256 校验文件。
+
+CLI 资产名以 `nginx-manager-<tag>-...` 开头；Desktop 资产名以 `nginx-manager-desktop-<tag>-...` 开头。Release 构建会把 tag 注入 CLI 版本，`/api/v1/info` 不再显示 `dev`。
+
 ## CLI
 
 首次必须设置密码：
@@ -32,13 +42,18 @@ nginx-manager serve --listen 127.0.0.1:8020
 ```text
 GET  /healthz
 GET  /api/v1/info                 Basic Auth
+GET    /api/v1/diagnostics               Basic Auth
 GET    /api/v1/nginx/status              Basic Auth
 GET    /api/v1/privilege/status          Basic Auth
 GET    /api/v1/sites                     Basic Auth
+GET    /api/v1/sites/{id}/config         Basic Auth
+GET    /api/v1/sites/{id}/upstream-health Basic Auth
 POST   /api/v1/sites/reverse-proxy       Basic Auth
 PUT    /api/v1/sites/{id}/reverse-proxy   Basic Auth
 PUT    /api/v1/sites/{id}/enabled         Basic Auth
+PUT    /api/v1/sites/{id}/tls             Basic Auth
 DELETE /api/v1/sites/{id}                Basic Auth
+POST   /api/v1/nginx/reload               Basic Auth
 GET    /api/v1/snapshots                 Basic Auth
 POST   /api/v1/snapshots/{id}/restore    Basic Auth
 GET    /api/v1/certificates              Basic Auth
@@ -64,7 +79,11 @@ Basic Auth 用户名固定为 `admin`，密码为 CLI 初始化时设置的管�
 
 Manager 创建的站点带 `# managed-by: nginx-manager` 标记。现有外部配置可以读取，但不会被新建、启停或删除操作覆盖。
 
-Manager 站点在停用或删除前会自动保存 root-only 快照；`sites-enabled` 与 `conf.d` 两种常见布局都支持安全启停。
+Manager 站点在停用或删除前会自动保存 root-only 快照；`sites-enabled` 与 `conf.d` 两种常见布局都支持安全启停。快照默认保留最近 200 个；正式部署通过 root-owned `/etc/nginx-manager/paths.json` 的 `snapshot_retention` 调整。
+
+反向代理还支持受控高级参数：最大请求体、上游连接超时和上游读取超时。参数只接受整数范围，不开放任意 Nginx 指令；站点编辑、HTTPS 开关和证书操作都会保留这些参数。
+
+站点配置支持只读预览。Manager / 外部站点都可读取，但只允许站点目录内的常规配置文件，拒绝逃逸 symlink，单文件限制为 256 KiB。
 
 ## HTTPS / ACME
 
@@ -82,11 +101,22 @@ HTTPS 由 Nginx Manager 控制 Nginx 配置，Certbot 只负责签发/续期证�
 
 已启用 HTTPS 的站点编辑上游或 WebSocket 时会保留证书配置；不能直接把域名改成与现有证书不匹配的新域名。
 
+HTTPS 可以事务关闭或切换 HTTP → HTTPS 跳转。关闭 HTTPS 时不会删除证书文件，并会保留 ACME Challenge 路由；如果服务器仍有匹配且有效的证书，之后可以不重新签发直接启用 HTTPS。
+
 可选的 systemd renewal timer 每天检查两次 Certbot 续期，并加入随机延迟，续期完成后自动执行 `nginx -t` 和 reload。自动续期服务直接由 root systemd oneshot 执行，不加入 Desktop/API 使用的 sudoers 规则。
 
 ## 日志读取
 
 日志读取同样走受限 root helper。Desktop 不发送日志路径，只发送由服务端生成的日志 ID。
+
+Manager 新建或编辑的反向代理会自动使用站点独立日志：
+
+```text
+/var/log/nginx/nginx-manager/<域名>.access.log
+/var/log/nginx/nginx-manager/<域名>.error.log
+```
+
+正式部署通过 root-owned `/etc/nginx-manager/paths.json` 的 `site_log_dir` 指定其他绝对目录；旧环境变量仅保留为开发/兼容 fallback。旧 Manager 站点会在下一次编辑时接入独立日志；外部配置不会自动改写。站点列表的“日志”快捷入口会优先直接打开独立 access log。
 
 服务端会：
 
@@ -106,13 +136,15 @@ HTTPS 由 Nginx Manager 控制 Nginx 配置，Certbot 只负责签发/续期证�
 
 请求通过 stdin 使用结构化 JSON 协议传递，helper 只接受预定义操作，不提供 shell、命令路径或任意文件路径参数。
 
-CLI 可以直接生成 sudoers 与 systemd 配置：
+CLI 可以直接生成 sudoers、systemd 与可信路径配置模板：
 
 ```bash
 nginx-manager privileged sudoers
 nginx-manager service systemd
 nginx-manager service renewal-service
 nginx-manager service renewal-timer
+nginx-manager config paths-file
+nginx-manager config paths-template
 ```
 
 完整部署步骤见 `docs/deployment.md`。
@@ -127,21 +159,29 @@ wails dev
 Desktop 当前能：
 
 - 保存多个 CLI 连接；
-- 切换当前连接；
+- 切换当前连接，并一键检查全部 CLI 的可达性 / 管理权限状态；
 - 安全保存每个连接的密码；
 - 测试 CLI 认证与连通性；
+- 自动聚合服务器总览：Nginx 配置、站点、HTTPS、证书、日志、自动续期和最近 access log 样本；
+- 安全 Reload：先执行 `nginx -t`，只有配置通过才 reload；
 - 展示服务器 Hostname、CLI 版本、Nginx/OpenResty Runtime；
 - 独立检查受限 root helper / `nginx -t` 是否就绪；
 - 读取当前服务器站点并区分 Manager 管理 / 外部配置；
+- 只读预览 Manager / 外部站点的 Nginx 配置；
 - 创建反向代理，并展示事务执行结果；
-- 编辑 Manager 反向代理的域名、上游和 WebSocket 设置；
+- 编辑 Manager 反向代理的域名、上游、WebSocket、请求体和超时设置；
+- 检查单个或批量 Manager 反向代理上游健康状态；检查目标只来自已保存的 `proxy_pass`，不接受任意 URL；
 - 启用、停用、删除 Manager 管理的站点；
 - 查看最近的配置快照；
 - 事务恢复历史快照，恢复前再次自动保存当前状态；
 - 查看 Certbot / 证书状态与到期时间；
 - 为 Manager 站点申请或更新 Let’s Encrypt 证书；
-- 可选 HTTP → HTTPS 强制跳转；
+- 开启 / 关闭 HTTPS，复用已有证书重新启用，并切换 HTTP → HTTPS 强制跳转；
 - 手动执行 Certbot 续期检查；
-- 安全浏览 Nginx/OpenResty 访问日志与错误日志尾部内容。
+- 安全浏览 Nginx/OpenResty 访问日志与错误日志尾部内容，可选每 10 秒自动刷新；
+- 在 Desktop 本地按站点域名和关键词过滤当前日志样本，并从站点列表快捷跳转到日志 / HTTPS 管理；
+- 总览展示证书过期/临期、HTTPS 站点证书匹配、自动续期维护提醒和按域名匹配的站点访问样本；
+- 支持 15 分钟 / 1 小时 / 6 小时 / 24 小时访问样本窗口（基于最近最多 1000 行，不作为完整历史统计）；
+- 系统诊断页只读展示 nginx-manager.service、Nginx/OpenResty service、Certbot、renewal timer、运行时布局和可信路径配置。
 
-下一阶段：运行状态与流量概览、站点级日志筛选、证书维护状态展示。
+下一阶段：部署向导、证书维护历史与更长期的流量统计。

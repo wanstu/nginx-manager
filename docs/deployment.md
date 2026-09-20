@@ -10,9 +10,14 @@
 
 ## 1. 安装二进制
 
+从 Release 下载对应 Linux CLI 资产后安装，例如：
+
 ```bash
-sudo install -m 0755 nginx-manager-linux-amd64 /usr/local/bin/nginx-manager
+VERSION=v0.1.0
+sudo install -m 0755 "nginx-manager-${VERSION}-linux-amd64" /usr/local/bin/nginx-manager
 ```
+
+安装后实际命令仍为 `/usr/local/bin/nginx-manager`。
 
 创建专用系统用户：
 
@@ -74,7 +79,41 @@ sudo rm -f /tmp/nginx-manager.sudoers
 
 不能借此运行任意 shell 或其他命令。
 
-## 4. 安装 systemd 服务
+## 4. 安装可信路径配置
+
+API 服务使用低权限用户，而实际配置/证书/日志操作由 root helper 执行。为了避免 `sudo` 清理环境变量后两边读取到不同路径，正式部署使用 root 管理的统一配置：
+
+```text
+/etc/nginx-manager/paths.json
+```
+
+生成默认模板：
+
+```bash
+sudo install -d -o root -g root -m 0755 /etc/nginx-manager
+
+/usr/local/bin/nginx-manager config paths-template \
+  | sudo tee /etc/nginx-manager/paths.json >/dev/null
+
+sudo chown root:root /etc/nginx-manager/paths.json
+sudo chmod 0644 /etc/nginx-manager/paths.json
+```
+
+默认内容：
+
+```json
+{
+  "snapshot_dir": "/var/lib/nginx-manager/snapshots",
+  "snapshot_retention": 200,
+  "acme_webroot": "/var/lib/nginx-manager/acme-webroot",
+  "cert_live_dir": "/etc/letsencrypt/live",
+  "site_log_dir": "/var/log/nginx/nginx-manager"
+}
+```
+
+Linux 默认路径下该文件必须由 root 持有，且不能允许 group/world 写入。旧的 `NGINX_MANAGER_SNAPSHOT_DIR`、`NGINX_MANAGER_ACME_WEBROOT`、`NGINX_MANAGER_CERT_LIVE_DIR`、`NGINX_MANAGER_SITE_LOG_DIR` 环境变量仅保留为开发/兼容 fallback；正式服务优先使用该文件。
+
+## 5. 安装 systemd 服务
 
 生成 unit：
 
@@ -106,7 +145,7 @@ sudo ss -lntp | grep 8020
 127.0.0.1:8020
 ```
 
-## 5. 验证
+## 6. 验证
 
 健康检查不需要密码：
 
@@ -128,7 +167,7 @@ curl -u admin http://127.0.0.1:8020/api/v1/privilege/status
 
 正常时应看到 `ready: true`；同时会返回 Nginx/OpenResty 运行时、配置布局和 `nginx -t` 状态。
 
-## 6. Desktop 连接
+## 7. Desktop 连接
 
 推荐优先使用 SSH Tunnel，不开放 8020：
 
