@@ -25,7 +25,10 @@ import (
 	"github.com/wanstu/wails-desktop-kit/secureconfig"
 )
 
-const desktopAppID = "nginx-manager-desktop"
+const (
+	desktopAppID               = "nginx-manager-desktop"
+	desktopSupportedAPIVersion = 1
+)
 
 var accessLogStatusRE = regexp.MustCompile(`"\s+(\d{3})\s+(\d+|-)`)
 var accessLogTimeRE = regexp.MustCompile(`\[([^\]]+)\]`)
@@ -58,23 +61,56 @@ type SaveConnectionRequest struct {
 }
 
 type ConnectionHealth struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	URL            string `json:"url"`
-	OK             bool   `json:"ok"`
-	PrivilegeReady bool   `json:"privilege_ready"`
-	Message        string `json:"message,omitempty"`
-	Runtime        string `json:"runtime,omitempty"`
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	URL               string `json:"url"`
+	OK                bool   `json:"ok"`
+	PrivilegeReady    bool   `json:"privilege_ready"`
+	Message           string `json:"message,omitempty"`
+	Runtime           string `json:"runtime,omitempty"`
+	Version           string `json:"version,omitempty"`
+	APIVersion        int    `json:"api_version,omitempty"`
+	CapabilitiesKnown bool   `json:"capabilities_known"`
+	APICompatible     bool   `json:"api_compatible"`
 }
 
 type TestResult struct {
-	OK               bool   `json:"ok"`
-	Message          string `json:"message"`
-	Hostname         string `json:"hostname,omitempty"`
-	Runtime          string `json:"runtime,omitempty"`
-	Version          string `json:"version,omitempty"`
-	PrivilegeReady   bool   `json:"privilege_ready"`
-	PrivilegeMessage string `json:"privilege_message,omitempty"`
+	OK                bool     `json:"ok"`
+	Message           string   `json:"message"`
+	Hostname          string   `json:"hostname,omitempty"`
+	Runtime           string   `json:"runtime,omitempty"`
+	Version           string   `json:"version,omitempty"`
+	APIVersion        int      `json:"api_version,omitempty"`
+	CapabilitiesKnown bool     `json:"capabilities_known"`
+	APICompatible     bool     `json:"api_compatible"`
+	Capabilities      []string `json:"capabilities,omitempty"`
+	PrivilegeReady    bool     `json:"privilege_ready"`
+	PrivilegeMessage  string   `json:"privilege_message,omitempty"`
+}
+
+type CapabilityResult struct {
+	Known        bool     `json:"known"`
+	Version      string   `json:"version,omitempty"`
+	APIVersion   int      `json:"api_version,omitempty"`
+	Compatible   bool     `json:"compatible"`
+	Capabilities []string `json:"capabilities"`
+}
+
+func apiVersionCompatible(version int) bool {
+	return version <= 0 || version <= desktopSupportedAPIVersion
+}
+
+type httpStatusError struct {
+	StatusCode int
+	Status     string
+	Message    string
+}
+
+func (e *httpStatusError) Error() string {
+	if strings.TrimSpace(e.Message) != "" {
+		return e.Message
+	}
+	return "HTTP " + e.Status
 }
 
 type RemoteSite struct {
@@ -401,6 +437,10 @@ func (a *App) CheckConnections() ([]ConnectionHealth, error) {
 			health.OK = result.OK
 			health.PrivilegeReady = result.PrivilegeReady
 			health.Runtime = result.Runtime
+			health.Version = result.Version
+			health.APIVersion = result.APIVersion
+			health.CapabilitiesKnown = result.CapabilitiesKnown
+			health.APICompatible = result.APICompatible
 			health.Message = result.Message
 			if result.OK && !result.PrivilegeReady && result.PrivilegeMessage != "" {
 				health.Message = result.PrivilegeMessage
@@ -568,9 +608,11 @@ func (a *App) TestConnection(id string) (TestResult, error) {
 		return TestResult{Message: "HTTP " + response.Status}, nil
 	}
 	var payload struct {
-		Version  string `json:"version"`
-		Hostname string `json:"hostname"`
-		Runtime  struct {
+		Version      string   `json:"version"`
+		APIVersion   int      `json:"api_version"`
+		Capabilities []string `json:"capabilities"`
+		Hostname     string   `json:"hostname"`
+		Runtime      struct {
 			Kind    string `json:"kind"`
 			Version string `json:"version"`
 		} `json:"runtime"`
@@ -601,13 +643,46 @@ func (a *App) TestConnection(id string) (TestResult, error) {
 	}
 
 	return TestResult{
-		OK:               true,
-		Message:          "连接正常",
-		Hostname:         payload.Hostname,
-		Runtime:          runtime,
-		Version:          payload.Version,
-		PrivilegeReady:   privilegeStatus.Ready && privilegeStatus.ConfigOK,
-		PrivilegeMessage: privilegeMessage,
+		OK:                true,
+		Message:           "连接正常",
+		Hostname:          payload.Hostname,
+		Runtime:           runtime,
+		Version:           payload.Version,
+		APIVersion:        payload.APIVersion,
+		CapabilitiesKnown: payload.APIVersion > 0,
+		APICompatible:     apiVersionCompatible(payload.APIVersion),
+		Capabilities:      append([]string(nil), payload.Capabilities...),
+		PrivilegeReady:    privilegeStatus.Ready && privilegeStatus.ConfigOK,
+		PrivilegeMessage:  privilegeMessage,
+	}, nil
+}
+
+func (a *App) LoadCapabilities(id string) (CapabilityResult, error) {
+	var payload struct {
+		Version      string   `json:"version"`
+		APIVersion   int      `json:"api_version"`
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := a.requestJSON(id, http.MethodGet, "/api/v1/capabilities", nil, &payload); err != nil {
+		var statusErr *httpStatusError
+		if errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound {
+			return CapabilityResult{
+				Known:        false,
+				Compatible:   true,
+				Capabilities: []string{},
+			}, nil
+		}
+		return CapabilityResult{}, err
+	}
+	if payload.Capabilities == nil {
+		payload.Capabilities = []string{}
+	}
+	return CapabilityResult{
+		Known:        payload.APIVersion > 0,
+		Version:      payload.Version,
+		APIVersion:   payload.APIVersion,
+		Compatible:   apiVersionCompatible(payload.APIVersion),
+		Capabilities: payload.Capabilities,
 	}, nil
 }
 
@@ -1257,10 +1332,15 @@ func (a *App) requestJSON(id, method, path string, input any, output any) error 
 		var payload struct {
 			Error string `json:"error"`
 		}
-		if json.Unmarshal(data, &payload) == nil && payload.Error != "" {
-			return errors.New(payload.Error)
+		message := ""
+		if json.Unmarshal(data, &payload) == nil {
+			message = strings.TrimSpace(payload.Error)
 		}
-		return fmt.Errorf("HTTP %s", response.Status)
+		return &httpStatusError{
+			StatusCode: response.StatusCode,
+			Status:     response.Status,
+			Message:    message,
+		}
 	}
 	if output != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, output); err != nil {

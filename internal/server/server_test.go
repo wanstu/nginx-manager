@@ -71,3 +71,42 @@ func TestServeRefusesMissingPassword(t *testing.T) {
 		t.Fatalf("Serve() error = %v; want password error", err)
 	}
 }
+
+func TestCapabilityFeaturesStable(t *testing.T) {
+	if APIVersion < 1 {
+		t.Fatalf("APIVersion = %d", APIVersion)
+	}
+	seen := map[string]bool{}
+	required := map[string]bool{
+		"sites_read":          false,
+		"sites_write":         false,
+		"https_acme":          false,
+		"logs":                false,
+		"diagnostics":         false,
+		"safe_reload":         false,
+		"traffic_window":      false,
+		"trusted_paths":       false,
+		"site_config_preview": false,
+		"site_logs":           false,
+	}
+	for i, feature := range capabilityFeatures {
+		if feature == "" {
+			t.Fatal("empty capability")
+		}
+		if seen[feature] {
+			t.Fatalf("duplicate capability %q", feature)
+		}
+		seen[feature] = true
+		if _, ok := required[feature]; ok {
+			required[feature] = true
+		}
+		if i > 0 && capabilityFeatures[i-1] > feature {
+			t.Fatalf("capability list is not sorted: %q before %q", capabilityFeatures[i-1], feature)
+		}
+	}
+	for feature, found := range required {
+		if !found {
+			t.Fatalf("required capability %q missing", feature)
+		}
+	}
+}

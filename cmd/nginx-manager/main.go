@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/wanstu/nginx-manager/internal/deploy"
+	"github.com/wanstu/nginx-manager/internal/doctor"
 	"github.com/wanstu/nginx-manager/internal/nginxmgr"
 	"github.com/wanstu/nginx-manager/internal/privilege"
 	"github.com/wanstu/nginx-manager/internal/server"
@@ -133,6 +134,28 @@ func run(args []string) error {
 			return nil
 		}
 		return errors.New("usage: nginx-manager config path | config paths-file | config paths-template")
+	case "doctor":
+		fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+		jsonOutput := fs.Bool("json", false, "output JSON report")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		defer cancel()
+		report := doctor.Run(ctx, version)
+		if *jsonOutput {
+			encoder := json.NewEncoder(os.Stdout)
+			encoder.SetIndent("", "  ")
+			if err := encoder.Encode(report); err != nil {
+				return err
+			}
+		} else {
+			fmt.Print(doctor.FormatText(report))
+		}
+		if !report.Healthy {
+			return errors.New("doctor found blocking errors")
+		}
+		return nil
 	case "version":
 		fmt.Println(version)
 		return nil
@@ -188,6 +211,7 @@ Usage:
   nginx-manager config path
   nginx-manager config paths-file
   nginx-manager config paths-template
+  nginx-manager doctor [--json]
   nginx-manager version
 
 The API refuses to start until a management password is configured.

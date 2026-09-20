@@ -100,6 +100,11 @@ button.wide { width:100%; }
   color: #087443;
   font-weight: 700;
 }
+.nav-item.unsupported,
+.nav-item:disabled {
+  opacity: .38;
+  cursor: not-allowed;
+}
 .sidebar-note {
   margin-top: auto;
   padding: 16px 8px 0;
@@ -186,7 +191,7 @@ input, select {
 .badge.warn { color:#b54708; background:rgba(181,71,8,.12); }
 .badge.bad { color:#b42318; background:rgba(180,35,24,.10); }
 
-.status-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+.status-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; }
 .status-grid > div {
   border:1px solid rgba(127,127,127,.15);
   border-radius:12px; padding:14px; display:grid; gap:6px;

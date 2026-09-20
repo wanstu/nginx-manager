@@ -1,6 +1,7 @@
 const state = {
   items: [],
   connectionHealth: {},
+  capabilities: {},
   upstreamHealth: {},
   selected: "",
   view: "overview",
@@ -29,6 +30,110 @@ function $(id) {
   return document.getElementById(id);
 }
 
+const viewCapabilities = {
+  sites: "sites_read",
+  snapshots: "snapshots",
+  certificates: "https_acme",
+  logs: "logs",
+  diagnostics: "diagnostics"
+};
+
+const desktopKnownCapabilities = [
+  "diagnostics",
+  "https_acme",
+  "logs",
+  "safe_reload",
+  "site_config_preview",
+  "site_logs",
+  "sites_read",
+  "sites_write",
+  "snapshots",
+  "traffic_window",
+  "trusted_paths",
+  "upstream_health"
+];
+
+async function loadCapabilities(connectionID) {
+  if (!connectionID) return null;
+  try {
+    const result = await api().LoadCapabilities(connectionID);
+    state.capabilities[connectionID] = result;
+  } catch (err) {
+    state.capabilities[connectionID] = {
+      known: false,
+      capabilities: [],
+      error: cleanError(err)
+    };
+  }
+  applyCapabilityUI();
+  const capability = state.capabilities[connectionID];
+  const requiredCapability = viewCapabilities[state.view];
+  if (capability?.known &&
+      requiredCapability &&
+      (capability.compatible === false || !(capability.capabilities || []).includes(requiredCapability))) {
+    activateView("overview");
+  }
+  return capability;
+}
+
+function currentCapabilities() {
+  return state.selected ? state.capabilities[state.selected] : null;
+}
+
+function hasCapability(feature) {
+  const capability = currentCapabilities();
+  if (!capability?.known) return true;
+  if (capability.compatible === false) return false;
+  return (capability.capabilities || []).includes(feature);
+}
+
+function applyCapabilityUI() {
+  const capability = currentCapabilities();
+  document.querySelectorAll(".nav-item").forEach((button) => {
+    const feature = viewCapabilities[button.dataset.view];
+    const unsupported = Boolean(
+      feature &&
+      capability?.known &&
+      (capability.compatible === false || !(capability.capabilities || []).includes(feature))
+    );
+    button.disabled = unsupported;
+    button.classList.toggle("unsupported", unsupported);
+    button.title = unsupported
+      ? (capability?.compatible === false
+          ? "当前 CLI API v" + (capability.api_version || 0) + " 高于 Desktop 支持的 v1"
+          : "当前 CLI 未声明能力：" + feature)
+      : "";
+  });
+
+  const knownCapabilities = capability?.capabilities || [];
+  const explicitlyMissing = (feature) => Boolean(
+    capability?.known &&
+    (capability.compatible === false || !knownCapabilities.includes(feature))
+  );
+
+  if ($("safeReloadBtn")) {
+    $("safeReloadBtn").disabled = explicitlyMissing("safe_reload");
+  }
+  if ($("createProxyBtn")) {
+    $("createProxyBtn").disabled = explicitlyMissing("sites_write");
+  }
+  if ($("checkAllUpstreamsBtn")) {
+    $("checkAllUpstreamsBtn").disabled = explicitlyMissing("upstream_health");
+  }
+
+  if (!state.selected) {
+    $("apiValue").textContent = "—";
+  } else if (!capability) {
+    $("apiValue").textContent = "检测中";
+  } else if (!capability.known) {
+    $("apiValue").textContent = "兼容模式";
+  } else if (capability.compatible === false) {
+    $("apiValue").textContent = "v" + capability.api_version + " · 过新";
+  } else {
+    $("apiValue").textContent = "v" + capability.api_version;
+  }
+}
+
 async function refresh() {
   const app = api();
   if (!app) return setTimeout(refresh, 100);
@@ -36,9 +141,11 @@ async function refresh() {
   state.items = await app.ListConnections();
   state.selected = await app.GetSelectedID();
   renderConnections();
+  applyCapabilityUI();
 
   if (state.selected) {
     loadEditor(state.selected);
+    await loadCapabilities(state.selected);
     if (state.view === "overview") await loadOverview();
     if (state.view === "sites") await loadSites();
     if (state.view === "snapshots") await loadSnapshots();
@@ -65,10 +172,14 @@ function renderConnections() {
     const health = state.connectionHealth[item.id];
     const healthClass = !health
       ? "unknown"
-      : (health.ok && health.privilege_ready ? "ok" : (health.ok ? "warn" : "bad"));
+      : (health.ok && health.privilege_ready && health.api_compatible !== false
+          ? "ok"
+          : (health.ok ? "warn" : "bad"));
     const healthText = !health
       ? "未检测"
-      : (health.ok && health.privilege_ready ? "正常" : (health.ok ? "权限" : "失败"));
+      : (health.ok && health.api_compatible === false
+          ? "API"
+          : (health.ok && health.privilege_ready ? "正常" : (health.ok ? "权限" : "失败")));
     button.innerHTML =
       '<div class="connection-head">' +
         "<strong>" + escapeHtml(item.name) + "</strong>" +
@@ -77,8 +188,19 @@ function renderConnections() {
         '</span>' +
       "</div>" +
       "<span>" + escapeHtml(item.url) + "</span>";
-    if (health?.message) {
-      button.querySelector(".connection-status").title = health.message;
+    if (health) {
+      const details = [];
+      if (health.message) details.push(health.message);
+      if (health.version) details.push("CLI " + health.version);
+      if (health.capabilities_known) {
+        details.push(
+          "API v" + (health.api_version || 0) +
+          (health.api_compatible === false ? " · Desktop 不兼容" : "")
+        );
+      } else if (health.ok) {
+        details.push("API 能力未知 · 兼容模式");
+      }
+      button.querySelector(".connection-status").title = details.join("\n");
     }
 
     button.onclick = async () => {
@@ -87,6 +209,7 @@ function renderConnections() {
       await api().SelectConnection(item.id);
       renderConnections();
       loadEditor(item.id);
+      await loadCapabilities(item.id);
       resetProxyEditor();
       state.pendingLogSite = "";
       state.pendingLogPath = "";
@@ -96,7 +219,7 @@ function renderConnections() {
       if (state.view === "snapshots") await loadSnapshots();
       if (state.view === "certificates") await loadCertificates();
       if (state.view === "logs") await loadLogs();
-    if (state.view === "diagnostics") await loadDiagnostics();
+      if (state.view === "diagnostics") await loadDiagnostics();
     };
     root.appendChild(button);
   }
@@ -126,6 +249,7 @@ function clearEditor(resetSelection = true) {
   resetDiagnostics();
   resetProxyEditor();
   updateHeader();
+  applyCapabilityUI();
 }
 
 function resetStatus() {
@@ -133,6 +257,7 @@ function resetStatus() {
   $("statusBadge").className = "badge";
   $("hostValue").textContent = "—";
   $("versionValue").textContent = "—";
+  $("apiValue").textContent = "—";
   $("runtimeValue").textContent = "—";
   $("privilegeValue").textContent = "—";
   $("message").textContent = state.selected ? "可测试当前 CLI 连接。" : "选择或新增一个 CLI 连接。";
@@ -161,7 +286,7 @@ function updateHeader() {
   }
 }
 
-function setView(view) {
+function activateView(view) {
   state.view = view;
   document.querySelectorAll(".nav-item").forEach((item) => {
     item.classList.toggle("active", item.dataset.view === view);
@@ -173,6 +298,16 @@ function setView(view) {
   $("logsView").classList.toggle("hidden", view !== "logs");
   $("diagnosticsView").classList.toggle("hidden", view !== "diagnostics");
   updateHeader();
+}
+
+function setView(view) {
+  const requiredCapability = viewCapabilities[view];
+  if (requiredCapability && !hasCapability(requiredCapability)) {
+    $("message").textContent = "当前 CLI 不支持此功能：" + requiredCapability;
+    return;
+  }
+
+  activateView(view);
   if (view === "overview") loadOverview();
   if (view === "sites") loadSites();
   if (view === "snapshots") loadSnapshots();
@@ -250,10 +385,22 @@ $("testBtn").onclick = async () => {
       ok: Boolean(result.ok),
       privilege_ready: Boolean(result.privilege_ready),
       message: result.privilege_message || result.message || "",
-      runtime: result.runtime || ""
+      runtime: result.runtime || "",
+      version: result.version || "",
+      api_version: result.api_version || 0,
+      capabilities_known: Boolean(result.capabilities_known),
+      api_compatible: result.api_compatible !== false
+    };
+    state.capabilities[state.selected] = {
+      known: Boolean(result.capabilities_known),
+      version: result.version || "",
+      api_version: result.api_version || 0,
+      compatible: result.api_compatible !== false,
+      capabilities: result.capabilities || []
     };
     renderConnections();
-    if (result.ok && result.privilege_ready) {
+    applyCapabilityUI();
+    if (result.ok && result.privilege_ready && result.api_compatible !== false) {
       $("statusBadge").textContent = "正常";
       $("statusBadge").className = "badge ok";
     } else if (result.ok) {
@@ -265,6 +412,9 @@ $("testBtn").onclick = async () => {
     }
     $("hostValue").textContent = result.hostname || "—";
     $("versionValue").textContent = result.version || "—";
+    $("apiValue").textContent = result.capabilities_known
+      ? "v" + (result.api_version || 0) + (result.api_compatible === false ? " · 过新" : "")
+      : "兼容模式";
     $("runtimeValue").textContent = result.runtime || "—";
     $("privilegeValue").textContent = result.privilege_ready ? "正常" : "未就绪";
     $("message").textContent = (result.message || "") + (result.privilege_message ? "\n管理权限：" + result.privilege_message : "");
@@ -348,6 +498,10 @@ async function loadOverview() {
 
     $("hostValue").textContent = result.hostname || "—";
     $("versionValue").textContent = result.cli_version || "—";
+    const capability = currentCapabilities();
+    $("apiValue").textContent = capability?.known
+      ? "v" + (capability.api_version || 0) + (capability.compatible === false ? " · 过新" : "")
+      : (capability ? "兼容模式" : "—");
     $("runtimeValue").textContent = result.runtime || "—";
     $("privilegeValue").textContent = result.privilege_ready ? "正常" : "未就绪";
 
@@ -533,6 +687,21 @@ async function loadDiagnostics() {
       : "未检测到";
     $("diagRenewal").textContent = formatRenewalTimerStatus(result.renewal_timer);
 
+    const capability = currentCapabilities();
+    const missingCapabilities = capability?.known
+      ? desktopKnownCapabilities.filter((feature) => !(capability.capabilities || []).includes(feature))
+      : [];
+    $("diagAPICompatibility").textContent = capability?.known
+      ? (
+          "API v" + (capability.api_version || 0) +
+          (capability.compatible === false ? " · 过新（Desktop 支持到 v1）" : "") +
+          (capability.version ? " · CLI " + capability.version : "")
+        )
+      : "能力未知 · 兼容模式";
+    $("diagCapabilities").textContent = capability?.known
+      ? (capability.capabilities || []).length + " 项" + (missingCapabilities.length ? " · 缺 " + missingCapabilities.length : " · 完整")
+      : "未声明";
+
     $("diagManagerExecutable").textContent = result.executable || "—";
     $("diagRuntimeKind").textContent =
       (result.runtime?.kind || "—") + (result.runtime?.version ? " · " + result.runtime.version : "");
@@ -576,6 +745,16 @@ async function loadDiagnostics() {
     }
     if (result.certbot?.available && !result.renewal_timer?.active) {
       notes.push("Certbot 可用，但 nginx-manager-renew.timer 当前未运行。");
+    }
+    if (!capability?.known) {
+      notes.push("当前 CLI 未声明 API 能力列表；Desktop 正以兼容模式运行。");
+    } else if (capability.compatible === false) {
+      notes.push(
+        "当前 CLI API v" + (capability.api_version || 0) +
+        " 高于 Desktop 支持的 v1；高级与写操作已进入保护状态。"
+      );
+    } else if (missingCapabilities.length) {
+      notes.push("当前 CLI 缺少 Desktop 已知能力：" + missingCapabilities.join(", "));
     }
 
     $("diagnosticsMessage").textContent = notes.length
@@ -752,6 +931,8 @@ function resetDiagnostics() {
   $("diagRuntimeService").textContent = "—";
   $("diagCertbot").textContent = "—";
   $("diagRenewal").textContent = "—";
+  $("diagAPICompatibility").textContent = "—";
+  $("diagCapabilities").textContent = "—";
   $("diagRuntimeKind").textContent = "—";
   $("diagRuntimePath").textContent = "—";
   $("diagLayoutMode").textContent = "—";
@@ -855,7 +1036,15 @@ async function loadSites() {
     state.sites = result.sites || [];
     state.layout = result.layout || null;
     renderSites();
-    $("siteMessage").textContent = "已读取 " + state.sites.length + " 个站点。";
+    const capability = currentCapabilities();
+    const readOnly = Boolean(
+      capability?.known &&
+      (capability.capabilities || []).includes("sites_read") &&
+      !(capability.capabilities || []).includes("sites_write")
+    );
+    $("siteMessage").textContent =
+      "已读取 " + state.sites.length + " 个站点。" +
+      (readOnly ? "\n当前 CLI 仅声明只读站点能力，写操作已隐藏。" : "");
   } catch (err) {
     state.sites = [];
     state.layout = null;
@@ -919,23 +1108,27 @@ function renderSites() {
     const actions = document.createElement("div");
     actions.className = "site-actions";
 
-    const viewConfig = document.createElement("button");
-    viewConfig.textContent = "配置";
-    viewConfig.onclick = () => openSiteConfig(site);
-    actions.appendChild(viewConfig);
+    if (hasCapability("site_config_preview")) {
+      const viewConfig = document.createElement("button");
+      viewConfig.textContent = "配置";
+      viewConfig.onclick = () => openSiteConfig(site);
+      actions.appendChild(viewConfig);
+    }
 
     if (site.managed) {
       if (site.server_name && site.server_name !== "_") {
-        const logs = document.createElement("button");
-        logs.textContent = "日志";
-        logs.onclick = () => {
-          state.pendingLogPath = site.access_log || "";
-          state.pendingLogSite = site.access_log ? "" : site.server_name;
-          setView("logs");
-        };
-        actions.appendChild(logs);
+        if (hasCapability("logs")) {
+          const logs = document.createElement("button");
+          logs.textContent = "日志";
+          logs.onclick = () => {
+            state.pendingLogPath = site.access_log || "";
+            state.pendingLogSite = site.access_log ? "" : site.server_name;
+            setView("logs");
+          };
+          actions.appendChild(logs);
+        }
 
-        if (site.proxy_pass) {
+        if (site.proxy_pass && hasCapability("https_acme")) {
           const certificate = document.createElement("button");
           certificate.textContent = site.https ? "证书" : "HTTPS";
           certificate.onclick = () => {
@@ -946,7 +1139,7 @@ function renderSites() {
         }
       }
 
-      if (site.proxy_pass) {
+      if (site.proxy_pass && hasCapability("upstream_health")) {
         const checkUpstream = document.createElement("button");
         checkUpstream.textContent = "测试上游";
         checkUpstream.onclick = async () => {
@@ -975,7 +1168,7 @@ function renderSites() {
         actions.appendChild(checkUpstream);
       }
 
-      if (site.proxy_pass && !site.access_log) {
+      if (site.proxy_pass && !site.access_log && hasCapability("sites_write")) {
         const migrateLogs = document.createElement("button");
         migrateLogs.textContent = "接入独立日志";
         migrateLogs.onclick = async () => {
@@ -1001,7 +1194,7 @@ function renderSites() {
         actions.appendChild(migrateLogs);
       }
 
-      if (site.proxy_pass) {
+      if (site.proxy_pass && hasCapability("sites_write")) {
         const edit = document.createElement("button");
         edit.textContent = "编辑";
         edit.onclick = () => {
@@ -1021,40 +1214,42 @@ function renderSites() {
         actions.appendChild(edit);
       }
 
-      const toggle = document.createElement("button");
-      toggle.textContent = site.enabled ? "停用" : "启用";
-      toggle.onclick = async () => {
-        toggle.disabled = true;
-        $("siteMessage").textContent = "正在" + (site.enabled ? "停用" : "启用") + " " + title + "…";
-        try {
-          await api().SetSiteEnabled(state.selected, site.id, !site.enabled);
-          await loadSites();
-        } catch (err) {
-          $("siteMessage").textContent = cleanError(err);
-        } finally {
-          toggle.disabled = false;
-        }
-      };
+      if (hasCapability("sites_write")) {
+        const toggle = document.createElement("button");
+        toggle.textContent = site.enabled ? "停用" : "启用";
+        toggle.onclick = async () => {
+          toggle.disabled = true;
+          $("siteMessage").textContent = "正在" + (site.enabled ? "停用" : "启用") + " " + title + "…";
+          try {
+            await api().SetSiteEnabled(state.selected, site.id, !site.enabled);
+            await loadSites();
+          } catch (err) {
+            $("siteMessage").textContent = cleanError(err);
+          } finally {
+            toggle.disabled = false;
+          }
+        };
 
-      const remove = document.createElement("button");
-      remove.className = "danger";
-      remove.textContent = "删除";
-      remove.onclick = async () => {
-        if (!confirm("删除 Manager 管理的站点 “" + title + "”？删除前会保存快照。")) return;
-        remove.disabled = true;
-        $("siteMessage").textContent = "正在删除 " + title + "…";
-        try {
-          await api().DeleteSite(state.selected, site.id);
-          await loadSites();
-        } catch (err) {
-          $("siteMessage").textContent = cleanError(err);
-        } finally {
-          remove.disabled = false;
-        }
-      };
+        const remove = document.createElement("button");
+        remove.className = "danger";
+        remove.textContent = "删除";
+        remove.onclick = async () => {
+          if (!confirm("删除 Manager 管理的站点 “" + title + "”？删除前会保存快照。")) return;
+          remove.disabled = true;
+          $("siteMessage").textContent = "正在删除 " + title + "…";
+          try {
+            await api().DeleteSite(state.selected, site.id);
+            await loadSites();
+          } catch (err) {
+            $("siteMessage").textContent = cleanError(err);
+          } finally {
+            remove.disabled = false;
+          }
+        };
 
-      actions.appendChild(toggle);
-      actions.appendChild(remove);
+        actions.appendChild(toggle);
+        actions.appendChild(remove);
+      }
     }
 
     item.querySelector(".site-side").appendChild(actions);

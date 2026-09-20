@@ -167,6 +167,20 @@ curl -u admin http://127.0.0.1:8020/api/v1/privilege/status
 
 正常时应看到 `ready: true`；同时会返回 Nginx/OpenResty 运行时、配置布局和 `nginx -t` 状态。
 
+也可以直接以 API 服务用户运行一次完整诊断：
+
+```bash
+sudo -u nginx-manager -H /usr/local/bin/nginx-manager doctor
+```
+
+需要机器可读结果时：
+
+```bash
+sudo -u nginx-manager -H /usr/local/bin/nginx-manager doctor --json
+```
+
+`doctor` 会检查管理密码、可信路径配置、Nginx/OpenResty、`nginx -t`、受限 sudo helper、systemd、Certbot 与自动续期 Timer。必须使用与 systemd API 服务相同的用户运行，否则检查到的管理密码配置目录可能不同。
+
 ## 7. Desktop 连接
 
 推荐优先使用 SSH Tunnel，不开放 8020：

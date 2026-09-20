@@ -40,8 +40,9 @@ nginx-manager serve --listen 127.0.0.1:8020
 当前 API：
 
 ```text
-GET  /healthz
-GET  /api/v1/info                 Basic Auth
+GET    /healthz
+GET    /api/v1/info                      Basic Auth
+GET    /api/v1/capabilities              Basic Auth
 GET    /api/v1/diagnostics               Basic Auth
 GET    /api/v1/nginx/status              Basic Auth
 GET    /api/v1/privilege/status          Basic Auth
@@ -64,6 +65,8 @@ GET    /api/v1/logs/{id}?lines=200       Basic Auth
 ```
 
 Basic Auth 用户名固定为 `admin`，密码为 CLI 初始化时设置的管理密码。
+
+`/api/v1/info` 与 `/api/v1/capabilities` 会返回 API 版本和能力列表。Desktop 只有在服务端明确声明能力时才按能力禁用页面；旧版 CLI 没有能力字段时进入兼容模式，不会把功能误判为不支持。这样同一个 Desktop 可以更安全地管理不同版本的 CLI。
 
 ### 反向代理事务
 
@@ -145,7 +148,11 @@ nginx-manager service renewal-service
 nginx-manager service renewal-timer
 nginx-manager config paths-file
 nginx-manager config paths-template
+nginx-manager doctor
+nginx-manager doctor --json
 ```
+
+`nginx-manager doctor` 提供服务用户视角的一次性只读诊断；正式部署建议使用 `sudo -u nginx-manager -H nginx-manager doctor`，确保密码配置目录与 systemd API 服务一致。
 
 完整部署步骤见 `docs/deployment.md`。
 
@@ -159,6 +166,7 @@ wails dev
 Desktop 当前能：
 
 - 保存多个 CLI 连接；
+- 对每个 CLI 进行 API 版本 / 能力协商；明确缺失能力时禁用对应页面，旧版 CLI 自动进入兼容模式；
 - 切换当前连接，并一键检查全部 CLI 的可达性 / 管理权限状态；
 - 安全保存每个连接的密码；
 - 测试 CLI 认证与连通性；

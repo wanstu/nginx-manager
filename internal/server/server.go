@@ -24,7 +24,23 @@ import (
 const (
 	AppID         = "nginx-manager"
 	ConfigVersion = 1
+	APIVersion    = 1
 )
+
+var capabilityFeatures = []string{
+	"diagnostics",
+	"https_acme",
+	"logs",
+	"safe_reload",
+	"site_config_preview",
+	"site_logs",
+	"sites_read",
+	"sites_write",
+	"snapshots",
+	"traffic_window",
+	"trusted_paths",
+	"upstream_health",
+}
 
 type Config struct {
 	Version      int    `json:"version"`
@@ -32,10 +48,18 @@ type Config struct {
 }
 
 type Info struct {
-	Version    string               `json:"version"`
-	Hostname   string               `json:"hostname"`
-	Executable string               `json:"executable,omitempty"`
-	Runtime    nginxmgr.RuntimeInfo `json:"runtime"`
+	Version      string               `json:"version"`
+	APIVersion   int                  `json:"api_version"`
+	Capabilities []string             `json:"capabilities"`
+	Hostname     string               `json:"hostname"`
+	Executable   string               `json:"executable,omitempty"`
+	Runtime      nginxmgr.RuntimeInfo `json:"runtime"`
+}
+
+type Capabilities struct {
+	Version      string   `json:"version"`
+	APIVersion   int      `json:"api_version"`
+	Capabilities []string `json:"capabilities"`
 }
 
 type NginxStatus struct {
@@ -150,10 +174,20 @@ func Serve(ctx context.Context, listen, version string) error {
 		hostname, _ := os.Hostname()
 		executable, _ := os.Executable()
 		writeJSON(w, http.StatusOK, Info{
-			Version:    version,
-			Hostname:   hostname,
-			Executable: executable,
-			Runtime:    nginxmgr.DetectRuntime(r.Context()),
+			Version:      version,
+			APIVersion:   APIVersion,
+			Capabilities: append([]string(nil), capabilityFeatures...),
+			Hostname:     hostname,
+			Executable:   executable,
+			Runtime:      nginxmgr.DetectRuntime(r.Context()),
+		})
+	})
+
+	protected("GET /api/v1/capabilities", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, Capabilities{
+			Version:      version,
+			APIVersion:   APIVersion,
+			Capabilities: append([]string(nil), capabilityFeatures...),
 		})
 	})
 

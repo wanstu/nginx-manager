@@ -171,6 +171,24 @@ func TestCertificateCoversHost(t *testing.T) {
 	}
 }
 
+func TestAPIVersionCompatible(t *testing.T) {
+	cases := []struct {
+		version int
+		want    bool
+	}{
+		{-1, true},
+		{0, true},
+		{1, true},
+		{2, false},
+		{99, false},
+	}
+	for _, tc := range cases {
+		if got := apiVersionCompatible(tc.version); got != tc.want {
+			t.Fatalf("apiVersionCompatible(%d) = %v, want %v", tc.version, got, tc.want)
+		}
+	}
+}
+
 func TestNormalizeEndpoint(t *testing.T) {
 	tests := []struct {
 		in      string
