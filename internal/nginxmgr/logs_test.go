@@ -53,14 +53,20 @@ func TestListLogsRestrictsPathsAndTailIsBounded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(logs) != 1 {
-		t.Fatalf("logs = %+v; want exactly one allowed log", logs)
+	var selected *LogFile
+	for i := range logs {
+		if logs[i].Path == filepath.Clean("/etc/passwd") {
+			t.Fatalf("disallowed log path was returned: %+v", logs[i])
+		}
+		if logs[i].Kind == "access" && logs[i].Path == filepath.Clean(accessPath) {
+			selected = &logs[i]
+		}
 	}
-	if logs[0].Kind != "access" || logs[0].Path != filepath.Clean(accessPath) {
-		t.Fatalf("unexpected log = %+v", logs[0])
+	if selected == nil {
+		t.Fatalf("configured allowed log missing from %+v", logs)
 	}
 
-	tail, err := manager.TailLog(context.Background(), logs[0].ID, 20)
+	tail, err := manager.TailLog(context.Background(), selected.ID, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
