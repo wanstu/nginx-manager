@@ -1,7 +1,0 @@
-{
-  "$schema": "https://wails.io/schemas/config.v2.json",
-  "name": "nginx-manager-desktop",
-  "outputfilename": "nginx-manager-desktop",
-  "frontend:dir": "frontend",
-  "wailsjsdir": "frontend"
-}
