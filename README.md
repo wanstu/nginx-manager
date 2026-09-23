@@ -1,200 +1,157 @@
-# Nginx Manager
+# Nginx Manager（归档）
 
-基于 Go + Wails + Wails Desktop Kit 的多服务器 Nginx / OpenResty 管理工具。
+> 项目已归档。当前默认分支不再保留可构建、可运行的实现代码，本仓库只保留项目理念、设计原则和历史边界说明。
 
-## 架构
+Nginx Manager 最初希望做一个面向个人服务器和小规模多服务器环境的 Nginx / OpenResty 管理工具：把高风险、容易出错的服务器配置操作收敛到一个受控后端，再通过 Desktop、Web 或其他客户端提供更友好的管理界面。
 
-- `nginx-manager`：部署在 Linux 服务器上的 CLI / HTTP 管理端。
-- `nginx-manager-desktop`：桌面控制台，可同时保存多个 CLI Endpoint。
-- Desktop 普通连接信息使用 Kit `jsonstore`；管理密码使用 Kit `secureconfig`，不会明文进入 settings.json。
-- CLI 只保存 bcrypt 密码哈希；未配置密码时拒绝启动管理 API。
-- Linux 上 HTTP API 拒绝以 root 身份运行；写配置通过固定的 `privileged apply` 入口最小提权。
-- 远程 Endpoint 必须使用 HTTPS；HTTP 仅允许 localhost / loopback，适合 SSH Tunnel。
+项目后续停止继续开发，实际服务器管理改用成熟面板方案。原实现仍可从 Git 历史中查看。
 
-## Release 资产
+## 核心理念
 
-正式 tag（`v*`）会在同一个 GitHub Release 中发布：
+### 1. 管理界面与服务器执行能力分离
 
-- CLI：Windows amd64、Linux amd64、macOS amd64 / arm64；
-- Desktop：Windows amd64、Linux amd64（raw / deb / tar.gz）、macOS universal；
-- 每个二进制/安装包对应的 SHA256 校验文件。
+服务器侧只提供稳定、受约束的管理 API / Agent 能力，Desktop、Web 等界面只是控制端。
 
-CLI 资产名以 `nginx-manager-<tag>-...` 开头；Desktop 资产名以 `nginx-manager-desktop-<tag>-...` 开头。Release 构建会把 tag 注入 CLI 版本，`/api/v1/info` 不再显示 `dev`。
+这样可以避免把 Linux 路径、systemd、sudoers、Certbot 等部署细节硬编码到某个特定 UI 中，也便于未来替换客户端而不重写服务器核心能力。
 
-## CLI
+### 2. 默认只读，写操作必须显式受控
 
-首次必须设置密码：
+服务器管理工具最危险的部分不是“看不到信息”，而是错误修改配置。
 
-```bash
-nginx-manager auth set-password
-```
+因此设计上应优先提供只读状态、诊断和预览；真正的写操作需要明确的能力边界、输入校验和最小权限。
 
-启动：
+### 3. 不以 root 身份长期运行
 
-```bash
-nginx-manager serve --listen 127.0.0.1:8020
-```
+长期运行的 HTTP / API 服务应使用普通专用用户。
 
-如果需要远程管理，建议仍让 CLI 监听本机，再通过 Nginx/Caddy HTTPS 反代；或者使用 SSH Tunnel。
+需要修改系统配置时，通过固定、可审计、参数受限的 privileged helper 完成，不提供任意 shell、任意命令路径或任意文件路径能力。
 
-当前 API：
+### 4. 配置变更必须是事务性的
 
-```text
-GET    /healthz
-GET    /api/v1/info                      Basic Auth
-GET    /api/v1/capabilities              Basic Auth
-GET    /api/v1/diagnostics               Basic Auth
-GET    /api/v1/deployment/plan            Basic Auth
-GET    /api/v1/nginx/status              Basic Auth
-GET    /api/v1/privilege/status          Basic Auth
-GET    /api/v1/sites                     Basic Auth
-GET    /api/v1/sites/{id}/config         Basic Auth
-GET    /api/v1/sites/{id}/upstream-health Basic Auth
-POST   /api/v1/sites/reverse-proxy       Basic Auth
-PUT    /api/v1/sites/{id}/reverse-proxy   Basic Auth
-PUT    /api/v1/sites/{id}/enabled         Basic Auth
-PUT    /api/v1/sites/{id}/tls             Basic Auth
-DELETE /api/v1/sites/{id}                Basic Auth
-POST   /api/v1/nginx/reload               Basic Auth
-GET    /api/v1/snapshots                 Basic Auth
-POST   /api/v1/snapshots/{id}/restore    Basic Auth
-GET    /api/v1/certificates              Basic Auth
-POST   /api/v1/sites/{id}/certificate    Basic Auth
-POST   /api/v1/certificates/renew        Basic Auth
-GET    /api/v1/logs                      Basic Auth
-GET    /api/v1/logs/{id}?lines=200       Basic Auth
-```
+对 Nginx / OpenResty 的修改不应采用“写文件后直接 reload”的方式。
 
-Basic Auth 用户名固定为 `admin`，密码为 CLI 初始化时设置的管理密码。
+理想流程是：
 
-`/api/v1/info` 与 `/api/v1/capabilities` 会返回 API 版本和能力列表。Desktop 只有在服务端明确声明能力时才按能力禁用页面；旧版 CLI 没有能力字段时进入兼容模式，不会把功能误判为不支持。这样同一个 Desktop 可以更安全地管理不同版本的 CLI。
+1. 校验输入；
+2. 生成候选配置；
+3. 对候选执行配置检查；
+4. 写入正式位置；
+5. 对完整配置再次检查；
+6. reload；
+7. 任一步失败时恢复变更前状态。
 
-`/api/v1/deployment/plan` 由 CLI 根据服务器真实状态生成生产部署步骤和命令，Desktop 只负责展示与复制，避免在不同 CLI 版本之间硬编码 sudoers、systemd 和路径模板。
+安全性优先于操作步骤最少。
 
-### 反向代理事务
+### 5. 明确区分“托管配置”和“外部配置”
 
-新建反向代理不会直接“写文件然后 reload”，而是：
+工具创建的资源可以由工具继续维护。
 
-1. 校验 `server_name` 与 `proxy_pass` 输入；
-2. 在临时目录生成候选站点和最小 Nginx 配置；
-3. 对候选执行 `nginx -t`；
-4. 候选通过后才写入真实站点目录并启用；
-5. 对完整线上配置再次执行 `nginx -t`；
-6. 完整测试通过后执行 reload；
-7. 全局测试或 reload 失败时删除本次新增配置并恢复旧运行配置。
+用户原本已有、由其他程序生成或手工维护的配置，即使能够读取，也不应未经明确接管就覆盖、删除或重写。
 
-Manager 创建的站点带 `# managed-by: nginx-manager` 标记。现有外部配置可以读取，但不会被新建、启停或删除操作覆盖。
+这是一条重要的所有权边界。
 
-Manager 站点在停用或删除前会自动保存 root-only 快照；`sites-enabled` 与 `conf.d` 两种常见布局都支持安全启停。快照默认保留最近 200 个；正式部署通过 root-owned `/etc/nginx-manager/paths.json` 的 `snapshot_retention` 调整。
+### 6. 服务端声明能力，客户端不要猜
 
-反向代理还支持受控高级参数：最大请求体、上游连接超时和上游读取超时。参数只接受整数范围，不开放任意 Nginx 指令；站点编辑、HTTPS 开关和证书操作都会保留这些参数。
+客户端应通过 API 版本与 capability negotiation 判断服务器实际支持哪些功能，而不是根据客户端版本或硬编码规则推测。
 
-站点配置支持只读预览。Manager / 外部站点都可读取，但只允许站点目录内的常规配置文件，拒绝逃逸 symlink，单文件限制为 256 KiB。
+这可以让新旧客户端与不同版本的 Agent 更安全地共存。
 
-## HTTPS / ACME
+### 7. 部署知识应由服务端提供
 
-HTTPS 由 Nginx Manager 控制 Nginx 配置，Certbot 只负责签发/续期证书，不使用 `certbot --nginx` 修改站点文件。
+sudoers、systemd、可信目录、证书续期等部署步骤与服务器版本和实现高度相关。
 
-首次签发流程：
+因此更合理的方向是由服务端生成部署计划和诊断结果，客户端只负责展示、引导和复制操作，而不是在 UI 中维护大量服务器模板。
 
-1. 为 Manager 站点临时加入 `/.well-known/acme-challenge/` Webroot；
-2. `nginx -t` 成功后 reload；
-3. 使用固定参数执行 Certbot HTTP-01；
-4. 验证签发证书与站点域名匹配；
-5. 生成 443 TLS 配置，可选 HTTP → HTTPS 301；
-6. 再次 `nginx -t` 后 reload；
-7. 任一步失败都恢复签发前站点配置。
+### 8. 多服务器先做可观测，再做批量写入
 
-已启用 HTTPS 的站点编辑上游或 WebSocket 时会保留证书配置；不能直接把域名改成与现有证书不匹配的新域名。
+Fleet 管理的第一步应是跨服务器只读总览，包括连接状态、站点、HTTPS、证书、运行时和诊断。
 
-HTTPS 可以事务关闭或切换 HTTP → HTTPS 跳转。关闭 HTTPS 时不会删除证书文件，并会保留 ACME Challenge 路由；如果服务器仍有匹配且有效的证书，之后可以不重新签发直接启用 HTTPS。
+批量修改属于更高风险能力，应建立在可靠的只读观测、权限模型和审计机制之后。
 
-可选的 systemd renewal timer 每天检查两次 Certbot 续期，并加入随机延迟，续期完成后自动执行 `nginx -t` 和 reload。自动续期服务直接由 root systemd oneshot 执行，不加入 Desktop/API 使用的 sudoers 规则。
+## 理想架构
 
-## 日志读取
-
-日志读取同样走受限 root helper。Desktop 不发送日志路径，只发送由服务端生成的日志 ID。
-
-Manager 新建或编辑的反向代理会自动使用站点独立日志：
+概念上的架构可以简化为：
 
 ```text
-/var/log/nginx/nginx-manager/<域名>.access.log
-/var/log/nginx/nginx-manager/<域名>.error.log
+Desktop / Web / Other Client
+            |
+      HTTPS / SSH Tunnel
+            |
+      nginx-manager Agent
+            |
+  Read-only inspection
+            |
+Restricted privileged helper
+            |
+ Nginx / OpenResty / systemd / Certbot
 ```
 
-正式部署通过 root-owned `/etc/nginx-manager/paths.json` 的 `site_log_dir` 指定其他绝对目录；旧环境变量仅保留为开发/兼容 fallback。旧 Manager 站点会在下一次编辑时接入独立日志；外部配置不会自动改写。站点列表的“日志”快捷入口会优先直接打开独立 access log。
+其中：
 
-服务端会：
+- Client 负责交互，不直接掌握服务器内部实现细节；
+- Agent 负责能力协商、业务校验、状态读取和事务编排；
+- privileged helper 只负责极少数必须提权的固定操作；
+- 系统资源始终保留明确的权限和所有权边界。
 
-- 从 `nginx -T` 解析当前 `access_log` / `error_log`；
-- 仅接受 Nginx/OpenResty 常见日志根目录中的路径；
-- tail 时重新解析当前配置并按日志 ID 匹配；
-- 拒绝 symlink 和非普通文件；
-- 单次最多返回 1000 行 / 512 KiB。
+## 安全设计原则
 
-## Linux 权限模型
+如果未来重新实现类似工具，建议继续坚持：
 
-`nginx-manager serve` 应以专用低权限用户运行。需要修改配置时，它只能执行 sudoers 明确放行的固定命令：
+- 管理 API 不以 root 身份运行；
+- 远程管理默认要求安全传输；
+- 密码、Token 等凭据与普通配置分离保存；
+- 提权入口只接受结构化、白名单化操作；
+- 所有配置写入前后都执行有效性检查；
+- destructive operation 之前保留可恢复状态；
+- 不允许通过用户输入拼接任意 shell；
+- 对文件读取限制根目录、文件类型、符号链接和最大大小；
+- 对日志、URL、上游探测等能力避免演变成任意文件读取或 SSRF；
+- 服务端能力与客户端 UI 显式协商；
+- 高风险批量操作必须晚于只读 Fleet 能力。
+
+## 产品层面的经验
+
+项目开发过程中形成了几条值得保留的产品判断：
+
+- CLI 适合作为服务器能力入口和诊断工具，但不适合作为主要日常管理界面；
+- 如果继续发展，更自然的方向是让同一套服务端 API 同时支持 Desktop 和 Web；
+- Web 登录、首个管理员初始化、Session 等应属于独立的认证层，不能和 Linux root 权限混在一起；
+- “最近日志样本”不能代替真正的长期流量统计，长期统计需要独立持久化与聚合设计；
+- 多服务器管理应先解决状态一致性、版本差异和失败隔离，再考虑批量变更；
+- 部署向导应以服务器真实状态驱动，而不是依赖客户端写死步骤。
+
+## 历史边界
+
+项目停止开发前的最后一个正式实现基线：
 
 ```text
-/usr/local/bin/nginx-manager privileged apply
+0bc3fd0 feat: add read-only fleet overview
 ```
 
-请求通过 stdin 使用结构化 JSON 协议传递，helper 只接受预定义操作，不提供 shell、命令路径或任意文件路径参数。
+历史正式版本：
 
-CLI 可以直接生成 sudoers、systemd 与可信路径配置模板：
-
-```bash
-nginx-manager privileged sudoers
-nginx-manager service systemd
-nginx-manager service renewal-service
-nginx-manager service renewal-timer
-nginx-manager config paths-file
-nginx-manager config paths-template
-nginx-manager doctor
-nginx-manager doctor --json
+```text
+v0.1.0 -> ef7b463
 ```
 
-`nginx-manager doctor` 提供服务用户视角的一次性只读诊断；正式部署建议使用 `sudo -u nginx-manager -H nginx-manager doctor`，确保密码配置目录与 systemd API 服务一致。
+历史实现包括 CLI、Desktop、Nginx/OpenResty 管理、HTTPS/Certbot、快照、日志、诊断、服务端驱动部署向导和只读 Fleet 总览。
 
-完整部署步骤见 `docs/deployment.md`。
+曾经实验过但**没有进入正式 master** 的方向包括：
 
-## Desktop
+- 长期流量持久化统计；
+- Web 管理端；
+- Web 账号注册与 Session 登录。
 
-```powershell
-cd cmd/nginx-manager-desktop
-wails dev
-```
+这些实验不属于正式发布能力，也没有在本次归档中恢复。
 
-Desktop 当前能：
+## 当前状态
 
-- 跨服务器只读总览：最多 4 台并发读取全部已保存 CLI 的连接、站点、HTTPS、证书与运维状态；单台失败不会中断整批，也不会读取日志正文或执行批量写操作；
-- 保存多个 CLI 连接；
-- 对每个 CLI 进行 API 版本 / 能力协商；明确缺失能力时禁用对应页面，旧版 CLI 自动进入兼容模式；
-- 切换当前连接，并一键检查全部 CLI 的可达性 / 管理权限状态；
-- 安全保存每个连接的密码；
-- 测试 CLI 认证与连通性；
-- 自动聚合服务器总览：Nginx 配置、站点、HTTPS、证书、日志、自动续期和最近 access log 样本；
-- 安全 Reload：先执行 `nginx -t`，只有配置通过才 reload；
-- 展示服务器 Hostname、CLI 版本、Nginx/OpenResty Runtime；
-- 独立检查受限 root helper / `nginx -t` 是否就绪；
-- 读取当前服务器站点并区分 Manager 管理 / 外部配置；
-- 只读预览 Manager / 外部站点的 Nginx 配置；
-- 创建反向代理，并展示事务执行结果；
-- 编辑 Manager 反向代理的域名、上游、WebSocket、请求体和超时设置；
-- 检查单个或批量 Manager 反向代理上游健康状态；检查目标只来自已保存的 `proxy_pass`，不接受任意 URL；
-- 启用、停用、删除 Manager 管理的站点；
-- 查看最近的配置快照；
-- 事务恢复历史快照，恢复前再次自动保存当前状态；
-- 查看 Certbot / 证书状态与到期时间；
-- 为 Manager 站点申请或更新 Let’s Encrypt 证书；
-- 开启 / 关闭 HTTPS，复用已有证书重新启用，并切换 HTTP → HTTPS 强制跳转；
-- 手动执行 Certbot 续期检查；
-- 安全浏览 Nginx/OpenResty 访问日志与错误日志尾部内容，可选每 10 秒自动刷新；
-- 在 Desktop 本地按站点域名和关键词过滤当前日志样本，并从站点列表快捷跳转到日志 / HTTPS 管理；
-- 总览展示证书过期/临期、HTTPS 站点证书匹配、自动续期维护提醒和按域名匹配的站点访问样本；
-- 支持 15 分钟 / 1 小时 / 6 小时 / 24 小时访问样本窗口（基于最近最多 1000 行，不作为完整历史统计）；
-- 系统诊断页只读展示 nginx-manager.service、Nginx/OpenResty service、Certbot、renewal timer、运行时布局和可信路径配置；
-- 部署向导按服务用户、密码归属、可信路径、最小 sudoers、systemd、Certbot/续期和 doctor 验证逐步检查，每一步只生成可复制命令，Desktop 不远程执行 root 安装操作。
+本仓库当前只作为设计归档存在：
 
-下一阶段：更长期的流量统计，以及建立在只读 Fleet 总览之上的受控批量运维。
+- 不再发布新版本；
+- 不再维护 CLI；
+- 不再维护 Desktop；
+- 不再维护 CI / Release 构建；
+- 不提供可直接部署的当前版本源码。
+
+如需查看历史实现，请使用 Git 历史或历史 tag。

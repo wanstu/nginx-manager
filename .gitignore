@@ -1,6 +1,0 @@
-.idea/
-.vscode/
-*.log
-dist/
-cmd/nginx-manager-desktop/build/bin/
-cmd/nginx-manager-desktop/frontend/wailsjs/
